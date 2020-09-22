@@ -27,6 +27,7 @@ def add_models():
 
 
 def get_model(args, vocab):
+    #print(model_dict)
     model = model_dict[args.model_name]
     model = model.resolve_args(args, vocab)
     return model.to(args.device)

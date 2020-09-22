@@ -2,6 +2,8 @@ from collections import defaultdict
 
 import torch
 import nltk
+from transformers import BertTokenizer
+from transformers import RobertaTokenizer
 
 from utils import *
 from .load_subtitle import merge_qa_subtitle, empty_sub
@@ -94,6 +96,9 @@ class ImageData:
         self.none_index = speaker_index['None']
         self.visual_pad = [self.none_index, self.pad_index, self.pad_index] 
 
+        #self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
+
         self.image_path = args.image_path
         self.image_dim = args.image_dim
         self.image_dt = self.load_images(args)
@@ -183,9 +188,11 @@ class ImageData:
                     person_info = person['person_info']
 
                     behavior = person_info['behavior'].lower()
+                    #behavior = self.line_to_indices(behavior)
                     behavior_idx = self.pad_index if behavior == '' else self.vocab.get_index(behavior.split()[0]) 
 
                     emotion = person_info['emotion'].lower()
+                    #emotion = self.line_to_indices(emotion)
                     emotion_idx= self.pad_index if emotion == '' else self.vocab.get_index(emotion) 
 
                     processed = [person_id_idx, behavior_idx, emotion_idx] # Don't convert visual to a tensor yet
@@ -197,6 +204,23 @@ class ImageData:
                     master_dict[frame]['person_fulls'] = list(pfu_dict[frame]) # (N, C) np.array -> list of N arrays of shape (C,)
 
         return full_images
+
+    def line_to_words(self, line, sos=True, eos=True, downcase=True, sos_token='[CLS]', eos_token='[SEP]'):
+        tokens = self.tokenizer.tokenize(line) # BertTokenizer 
+        words = [sos_token] if sos else []
+        words = words + [w for w in tokens if w != ""]
+        words = words + [eos_token] if eos else words
+        return words
+
+    def words_to_indices(self, words):
+        indices = self.tokenizer.convert_tokens_to_ids(words) # BertTokenizer
+        return indices
+
+    def line_to_indices(self, line, sos=True, eos=True, downcase=True):
+        words = self.line_to_words(line, sos=sos, eos=eos, downcase=downcase)
+        indices = self.words_to_indices(words)
+        return indices
+
 
     def get_image_by_vid(self, episode, scene, shot_contained):
         first_shot = shot_contained[0]
@@ -273,10 +297,6 @@ class ImageData:
 
 class TextData:
     def __init__(self, args, vocab=None):
-        #self.val_types = ['all', 'ch_only']
-        #if args.val_type not in self.val_types:
-        #    raise ValueError('val_type should be ' + ' or '.join(self.val_types))
-
         self.args = args
 
         self.line_keys = ['que']
@@ -289,8 +309,19 @@ class TextData:
         self.visual_path = args.visual_path
         self.json_data_path = {m: get_data_path(args, mode=m, ext='.json') for m in modes}
         self.pickle_data_path = {m: get_data_path(args, mode=m, ext='.pickle') for m in modes}
+        self.raw_texts = {mode: load_json(self.json_data_path[mode]) for mode in modes}
         
-        self.tokenizer = get_tokenizer(args)
+        #self.tokenizer = get_tokenizer(args)
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        """
+        self.tokenizer.add_tokens(['None', # index 0: unknown speaker 
+            'Anna', 'Chairman', 'Deogi', 'Dokyung', 'Gitae',
+            'Haeyoung1', 'Haeyoung2', 'Heeran', 'Hun', 'Jeongsuk',
+            'Jinsang', 'Jiya', 'Kyungsu', 'Sangseok', 'Seohee', 
+            'Soontack', 'Sukyung', 'Sungjin', 'Taejin', 'Yijoon'])
+        self.tokenizer.add_special_tokens({'bos_token': sos_token, 'eos_token': eos_token, 'unk_token': unk_token, 'pad_token': pad_token})
+        """
+        print("Tokenizer vocabulary size:", len(self.tokenizer))
         self.eos_re = re.compile(r'[\s]*[.?!]+[\s]*')        
 
         self.special_tokens = [sos_token, eos_token, pad_token, unk_token]
@@ -302,14 +333,13 @@ class TextData:
             else: # There is no cached vocab. Build vocabulary and preprocess text data
                 print('There is no cached vocab.')
                 vocab = self.build_word_vocabulary()
+                #vocab = None
                 self.preprocess_text(vocab)
+                save_pickle(vocab, self.vocab_path) 
 
         self.vocab = vocab
-
         self.data = {m: load_pickle(self.pickle_data_path[m]) for m in modes} 
-        if args.val_type == 'ch_only' :
-            self.data['val'] = load_pickle(get_data_path(args, mode='val_ch_only', ext='.pickle'))
-    
+
     # borrowed this implementation from load_glove of tvqa_dataset.py (TVQA),
     # which borrowed from @karpathy's neuraltalk.
     def build_word_vocabulary(self, word_count_threshold=0):
@@ -442,18 +472,22 @@ class TextData:
 
         return vocab
 
+
     def preprocess_text(self, vocab):
         print('Splitting long subtitles and converting words in text data to indices, timestamps from string to float.')
-        word2idx = vocab.stoi
         texts = self.raw_texts # self.raw_texts is assigned in self.build_word_vocabulary
         for text in texts.values():
             for e in text:
+                question = e['que']
+                answers = e['answers']
+                e['qa'] = self.qa_to_indices(question, answers)
+
                 for k in self.line_keys:
-                    e[k] = self.line_to_indices(e[k], word2idx)
+                    e[k] = self.line_to_indices(e[k])
 
                 for k in self.list_keys:
-                    e[k] = [self.line_to_indices(line, word2idx) for line in e[k]]
-
+                    e[k] = [self.line_to_indices(line) for line in e[k]]
+                
                 subtitle = e['subtitle']
 
                 if subtitle != empty_sub:
@@ -466,7 +500,7 @@ class TextData:
                         sub['et'] = float(sub['et'])
                         sub['st'] = float(sub['st'])
                         sub['speaker'] = speaker_index[sub['speaker']] # to speaker index
-                        split_subs = self.split_subtitle(sub, to_indices=True, word2idx=word2idx)
+                        split_subs = self.split_subtitle(sub, to_indices=True)
                         new_subs.extend(split_subs)
 
                     subtitle['contained_subs'] = new_subs
@@ -476,23 +510,6 @@ class TextData:
             save_pickle(texts[mode], self.pickle_data_path[mode])
 
         del self.raw_texts
-
-        self.extract_val_ch_only(texts['val'])
-
-    def extract_val_ch_only(self, data):
-        print('Extracting QAs that contains 5 different people in answer')
-
-        new_data = []
-        for qa in tqdm(data):
-            ans = qa['answers']
-            ans = [torch.tensor(ans[i], dtype=int_dtype) for i in range(5)]
-
-            persons = set(idx.item() for i in range(5) for idx in ans[i][ans[i] < n_speakers])
-
-            if len(persons) >= 5:
-                new_data.append(qa)
-
-        save_pickle(new_data, get_data_path(self.args, mode='val_ch_only', ext='.pickle'))
 
     # borrowed this implementation from TVQA (load_glove of tvqa_dataset.py)
     def load_glove(self, glove_path):
@@ -509,10 +526,7 @@ class TextData:
 
         return glove, embedding_dim
 
-    def split_subtitle(self, sub, sos=True, eos=True, to_indices=False, word2idx=None):
-        if to_indices == True and word2idx == None:
-            raise ValueError('word2idx should be given when to_indices is True')
-
+    def split_subtitle(self, sub, sos=True, eos=True, to_indices=False):
         n_special_tokens = sos + eos # True == 1, False == 0
         st, et = sub['st'], sub['et']
         t_range = et - st
@@ -520,7 +534,7 @@ class TextData:
 
         utters = self.split_string(sub['utter'], sos=sos, eos=eos)
         if to_indices:
-            utters = [self.words_to_indices(words, word2idx) for words in utters]
+            utters = [self.words_to_indices(words) for words in utters]
 
         if len(utters) == 1: 
             sub['utter'] = utters[0]
@@ -582,26 +596,38 @@ class TextData:
         return string.strip()
 
     # borrowed this implementation from TVQA (line_to_words of tvqa_dataset.py)
-    def line_to_words(self, line, sos=True, eos=True, downcase=True):
-        line = self.clean_string(line)
-        tokens = self.tokenizer(line.lower()) if downcase else self.tokenizer(line)
-
+    def line_to_words(self, line, sos=True, eos=True, downcase=True, sos_token='[CLS]', eos_token='[SEP]', qa=False):
+        if qa:
+            q, a = line
+            q = self.clean_string(q)
+            a = self.clean_string(a)
+            q_tokens = self.tokenizer.tokenize(q)
+            a_tokens = self.tokenizer.tokenize(a)
+            tokens = q_tokens + [eos_token] + a_tokens
+        else:
+            line = self.clean_string(line)
+            tokens = self.tokenizer.tokenize(line) # BertTokenizer
+        
         words = [sos_token] if sos else []
         words = words + [w for w in tokens if w != ""]
         words = words + [eos_token] if eos else words
-
         return words
 
-    def words_to_indices(self, words, word2idx):
-        indices = [word2idx.get(w, word2idx[unk_token]) for w in words]
-
+    def words_to_indices(self, words):
+        indices = self.tokenizer.convert_tokens_to_ids(words) # BertTokenizer
         return indices
 
-    def line_to_indices(self, line, word2idx, sos=True, eos=True, downcase=True):
+    def line_to_indices(self, line, sos=True, eos=True, downcase=True):
         words = self.line_to_words(line, sos=sos, eos=eos, downcase=downcase)
-        indices = self.words_to_indices(words, word2idx)
-
+        indices = self.words_to_indices(words)
         return indices
+
+    def qa_to_indices(self, question, answers, sos=True, eos=True, downcase=True, eos_token='[SEP]'):
+        lines = [[question, answer] for answer in answers]
+        words = [self.line_to_words(line, sos=sos, eos=eos, downcase=downcase, eos_token=eos_token, qa=True) for line in lines]
+        indices = [self.words_to_indices(w) for w in words]
+        return indices
+
 
     def merge_text_data(self):
         for mode in modes:
@@ -618,7 +644,7 @@ def get_data_path(args, mode='train', ext='.json'):
     name = '_'.join(name)
     path = args.data_path.parent / name
     path = path.parent / (path.stem + ext)
-
+    print(path)
     return path
 
 class MultiModalData(Dataset):
@@ -654,6 +680,7 @@ class MultiModalData(Dataset):
         text = self.text[idx]
         qid = text['qid']
         que = text['que']
+        qa = text['qa']
         ans = text['answers'] 
         subtitle = text['subtitle']
         correct_idx = text['correct_idx'] if self.mode != 'test' else None
@@ -759,6 +786,7 @@ class MultiModalData(Dataset):
         data = {
             'que': que,
             'ans': ans,
+            'qa': qa,
             'correct_idx': correct_idx,
 
             'sub_in_sen': sub_in_sen_l,
@@ -788,20 +816,9 @@ class MultiModalData(Dataset):
 
         que, que_l = self.pad2d(collected['que'], self.pad_index, int_dtype)
         ans, _, ans_l = self.pad3d(collected['ans'], self.pad_index, int_dtype)
+        qa, _, qa_l = self.pad3d(collected['qa'], self.pad_index, int_dtype)
         correct_idx = torch.tensor(collected['correct_idx'], dtype=int_dtype) if self.mode != 'test' else None # correct_idx does not have to be padded
-       
-        correct_answer_list = []
-        for idx, a in enumerate(ans):
-            correct_answer_tensor = torch.index_select(a, dim=0, index=correct_idx[idx])
-            correct_answer_list.append(correct_answer_tensor)
-        correct_answer = torch.stack(correct_answer_list, dim=0).squeeze()
-
-        correct_answer_len_list = []
-        for idx, a in enumerate(ans_l):
-            correct_answer_len_tensor = torch.index_select(a, dim=0, index=correct_idx[idx])
-            correct_answer_len_list.append(correct_answer_len_tensor)
-        correct_answer_len = torch.stack(correct_answer_len_list, dim=0).squeeze()
-
+        
         spkr_of_s, _ = self.pad2d(collected['spkr_of_sen'], self.none_index, int_dtype)
         mean_fi, _, _ = self.pad3d(collected['mean_fi'], 0, float_dtype)
         sample_v, _, _ = self.pad3d(collected['sample_v'], self.image.visual_pad, int_dtype)
@@ -818,11 +835,11 @@ class MultiModalData(Dataset):
         
         data = {
             'que': que,
-            'answers': ans, 
-            'correct_answer': correct_answer,
-            'correct_answer_len': correct_answer_len,
+            'answers': ans,
+            'qa': qa,
             'que_len': que_l,
             'ans_len': ans_l,
+            'qa_len': qa_l,
 
             'subtitle': sub_in_s, 
             'speaker': spkr_of_s, 
@@ -866,7 +883,6 @@ class MultiModalData(Dataset):
         for i in range(batch_size):
             d = torch.tensor(data[i], dtype=dtype)
             p_data[i, :len(d)] = d
-
         return p_data, p_length
 
     def pad3d(self, data, pad_val, dtype):
@@ -935,6 +951,8 @@ def load_data(args, vocab=None):
         collate_fn=test_dataset.collate_fn
     )
 
+    #val_iter = extract_val_ch_only(args, val_iter)
+
     return {'train': train_iter, 'val': val_iter, 'test': test_iter}, vocab
 
 
@@ -944,3 +962,18 @@ def get_iterator(args, vocab=None):
 
     return iters, vocab
 
+def extract_val_ch_only(args, data):
+    new_data = []
+
+    print('extract_ans_with_5_different_people')
+    for qa in tqdm(data):
+        ans = qa['answers']
+        ans = [torch.tensor(ans[i], dtype=int_dtype) for i in range(5)]
+
+        persons = set(idx.item() for i in range(5) for idx in ans[i][ans[i] < n_speakers])
+
+        if len(persons) >= 5:
+            new_data.append(qa)
+
+    save_pickle(new_data, get_data_path(args, mode='val_ch_only', ext='.pickle'))
+    return new_data

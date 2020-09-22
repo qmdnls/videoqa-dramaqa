@@ -789,19 +789,7 @@ class MultiModalData(Dataset):
         que, que_l = self.pad2d(collected['que'], self.pad_index, int_dtype)
         ans, _, ans_l = self.pad3d(collected['ans'], self.pad_index, int_dtype)
         correct_idx = torch.tensor(collected['correct_idx'], dtype=int_dtype) if self.mode != 'test' else None # correct_idx does not have to be padded
-       
-        correct_answer_list = []
-        for idx, a in enumerate(ans):
-            correct_answer_tensor = torch.index_select(a, dim=0, index=correct_idx[idx])
-            correct_answer_list.append(correct_answer_tensor)
-        correct_answer = torch.stack(correct_answer_list, dim=0).squeeze()
-
-        correct_answer_len_list = []
-        for idx, a in enumerate(ans_l):
-            correct_answer_len_tensor = torch.index_select(a, dim=0, index=correct_idx[idx])
-            correct_answer_len_list.append(correct_answer_len_tensor)
-        correct_answer_len = torch.stack(correct_answer_len_list, dim=0).squeeze()
-
+        
         spkr_of_s, _ = self.pad2d(collected['spkr_of_sen'], self.none_index, int_dtype)
         mean_fi, _, _ = self.pad3d(collected['mean_fi'], 0, float_dtype)
         sample_v, _, _ = self.pad3d(collected['sample_v'], self.image.visual_pad, int_dtype)
@@ -819,8 +807,6 @@ class MultiModalData(Dataset):
         data = {
             'que': que,
             'answers': ans, 
-            'correct_answer': correct_answer,
-            'correct_answer_len': correct_answer_len,
             'que_len': que_l,
             'ans_len': ans_l,
 

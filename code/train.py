@@ -40,7 +40,7 @@ def get_trainer(args, model, loss_fn, optimizer):
 
 def train(args):
     args, model, iters, vocab, ckpt_available = get_model_ckpt(args)
-    
+
     if ckpt_available:
         print("loaded checkpoint {}".format(args.ckpt_name))
     loss_fn = get_loss(args, vocab)

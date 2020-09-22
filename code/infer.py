@@ -42,6 +42,8 @@ def infer(args):
     split = args.split 
 
     args, model, iters, vocab, ckpt_available = get_model_ckpt(args)
+    print("loaded:", args.ckpt_name)
+    print("ckpt_available:", ckpt_available)
     if ckpt_available:
         print("loaded checkpoint {}".format(args.ckpt_name))
     loss_fn = get_loss(args, vocab)
