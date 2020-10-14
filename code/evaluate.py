@@ -1,4 +1,5 @@
 import torch
+from torch import nn
 from ignite.engine.engine import Engine, State, Events
 from metric.stat_metric import StatMetric
 
@@ -46,10 +47,29 @@ def get_evaluator(args, model, loss_fn, metrics={}):
             net_inputs, target = prepare_batch(args, batch, model.vocab)
             if net_inputs['subtitle'].nelement() == 0:
                 import ipdb; ipdb.set_trace()  # XXX DEBUG
-            y_pred = model(**net_inputs)
+            y_pred, char_pred, mask_pred = model(**net_inputs)
             batch_size = y_pred.shape[0]
+
+            # get person ground truth and compute character loss
+            n_char = 21
+            visual_char = net_inputs['filtered_visual'].view(batch_size, -1, 3)[:,:,0]
+            char_target = visual_char.unsqueeze(2).view(batch_size, -1)
+            char_target = char_target.view(-1)
+            char_pred = char_pred.view(-1, n_char)
+            character_loss = nn.CrossEntropyLoss().cuda()(char_pred, char_target)
+
+            # get ground truth labels and compute MLM loss
+            vocab_size = mask_pred.size(-1)
+            mask_target = net_inputs['labels']
+            mask_target = mask_target.view(-1)
+            mask_pred = mask_pred.view(-1, vocab_size)
+            mlm_loss = nn.CrossEntropyLoss(ignore_index=-1).cuda()(mask_pred, mask_target)
+
+            # compute QA loss
             loss, stats = loss_fn(y_pred, target)
 
+            # compute total loss
+            loss = loss + character_loss + mlm_loss
             vocab = model.vocab
             '''
             if sample_count < 100:
@@ -123,7 +143,7 @@ def evaluate_by_logic_level(args, model, iterator, print_total=False):
             if net_inputs['subtitle'].nelement() == 0:
                 import ipdb; ipdb.set_trace()  # XXX DEBUG
 
-            y_pred = model(**net_inputs)   
+            y_pred, _, _ = model(**net_inputs)   
             _, pred_idx = y_pred.max(dim=1)
             result = pred_idx == target
 

@@ -2,6 +2,9 @@ from collections import defaultdict
 
 import torch
 import nltk
+import itertools
+import random
+from transformers import RobertaTokenizer
 
 from utils import *
 from .load_subtitle import merge_qa_subtitle, empty_sub
@@ -19,8 +22,9 @@ from pprint import pprint
 
 modes = ['train', 'val', 'test']
 
-sos_token = '<sos>'
-eos_token = '<eos>'
+sos_token = '<s>'
+eos_token = '</s>'
+mask_token = '<mask>'
 pad_token = '<pad>'
 unk_token = '<unk>'
 
@@ -86,13 +90,18 @@ class Vocab(np.ndarray):
         return self.stoi.get(word, self.stoi[unk_token])
 
 class ImageData:
-    def __init__(self, args, vocab):
+    def __init__(self, args, tokenizer):
         self.args = args
 
-        self.vocab = vocab
-        self.pad_index = vocab.get_index(pad_token)
+        #self.vocab = vocab
+        self.tokenizer = tokenizer
+        #self.pad_index = vocab.get_index(pad_token)
+        self.pad_index = self.tokenizer.get_vocab()[pad_token]
         self.none_index = speaker_index['None']
         self.visual_pad = [self.none_index, self.pad_index, self.pad_index] 
+
+        #self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
 
         self.image_path = args.image_path
         self.image_dim = args.image_dim
@@ -183,10 +192,14 @@ class ImageData:
                     person_info = person['person_info']
 
                     behavior = person_info['behavior'].lower()
-                    behavior_idx = self.pad_index if behavior == '' else self.vocab.get_index(behavior.split()[0]) 
+                    #behavior = self.line_to_indices(behavior)
+                    #behavior_idx = self.pad_index if behavior == '' else self.vocab.get_index(behavior.split()[0]) 
+                    behavior_idx = self.pad_index if behavior == '' else self.tokenizer.encode(behavior.split()[0], add_special_tokens=False)[0]
 
                     emotion = person_info['emotion'].lower()
-                    emotion_idx= self.pad_index if emotion == '' else self.vocab.get_index(emotion) 
+                    #emotion = self.line_to_indices(emotion)
+                    #emotion_idx = self.pad_index if emotion == '' else self.vocab.get_index(emotion)
+                    emotion_idx = self.pad_index if emotion == '' else self.tokenizer.encode(emotion, add_special_tokens=False)[0]
 
                     processed = [person_id_idx, behavior_idx, emotion_idx] # Don't convert visual to a tensor yet
                     processed_persons.append(processed)
@@ -197,6 +210,23 @@ class ImageData:
                     master_dict[frame]['person_fulls'] = list(pfu_dict[frame]) # (N, C) np.array -> list of N arrays of shape (C,)
 
         return full_images
+
+    def line_to_words(self, line, sos=True, eos=True, downcase=True, sos_token='<s>', eos_token='</s>'):
+        tokens = self.tokenizer.tokenize(line) # RobertaTokenizer 
+        words = [sos_token] if sos else []
+        words = words + [w for w in tokens if w != ""]
+        words = words + [eos_token] if eos else words
+        return words
+
+    def words_to_indices(self, words):
+        indices = self.tokenizer.convert_tokens_to_ids(words) # BertTokenizer
+        return indices
+
+    def line_to_indices(self, line, sos=True, eos=True, downcase=True):
+        words = self.line_to_words(line, sos=sos, eos=eos, downcase=downcase)
+        indices = self.words_to_indices(words)
+        return indices
+
 
     def get_image_by_vid(self, episode, scene, shot_contained):
         first_shot = shot_contained[0]
@@ -218,6 +248,7 @@ class ImageData:
         all_pfu = []  # list of person_full features (aligned with person)
         all_v = []    # list of visuals              (aligned with person)
         sample_v = [] # first visual in the range
+        per_person_features = defaultdict(list) # dict of features on a person-level rather than frame-level
 
         cur_id = start_frame_id
         added_8 = False
@@ -236,6 +267,10 @@ class ImageData:
                 pfu = frame['person_fulls']
                 all_pfu.extend(pfu)
 
+                for person, pfu in zip(p, pfu):
+                    person_idx = person[0]
+                    per_person_features[person_idx].append(pfu)
+                
                 cnt += 1
 
                 # adjacent frame ids in a shot differ by 8, so
@@ -250,6 +285,7 @@ class ImageData:
                 cur_id += 1
                 added_8 = False
 
+       
         if cnt == 0:
             mean_fi = np.zeros(self.image_dim)
         else:
@@ -267,16 +303,18 @@ class ImageData:
             all_v = [self.visual_pad]
             all_pfu.append(np.zeros(self.image_dim))
 
+        # compute mean on a per person basis
+        for key, value in per_person_features.items():
+            per_person_features[key] = np.mean(value, axis=0)
+        # flatten
+        #per_person_features = list(per_person_features.values())
+
         # Don't convert visual to tensors yet
-        return mean_fi, all_fi, sample_v, all_v, all_pfu
+        return mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features
 
 
 class TextData:
     def __init__(self, args, vocab=None):
-        #self.val_types = ['all', 'ch_only']
-        #if args.val_type not in self.val_types:
-        #    raise ValueError('val_type should be ' + ' or '.join(self.val_types))
-
         self.args = args
 
         self.line_keys = ['que']
@@ -289,8 +327,19 @@ class TextData:
         self.visual_path = args.visual_path
         self.json_data_path = {m: get_data_path(args, mode=m, ext='.json') for m in modes}
         self.pickle_data_path = {m: get_data_path(args, mode=m, ext='.pickle') for m in modes}
+        self.raw_texts = {mode: load_json(self.json_data_path[mode]) for mode in modes}
         
-        self.tokenizer = get_tokenizer(args)
+        #self.tokenizer = get_tokenizer(args)
+        self.tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
+        """
+        self.tokenizer.add_tokens(['None', # index 0: unknown speaker 
+            'Anna', 'Chairman', 'Deogi', 'Dokyung', 'Gitae',
+            'Haeyoung1', 'Haeyoung2', 'Heeran', 'Hun', 'Jeongsuk',
+            'Jinsang', 'Jiya', 'Kyungsu', 'Sangseok', 'Seohee', 
+            'Soontack', 'Sukyung', 'Sungjin', 'Taejin', 'Yijoon'])
+        self.tokenizer.add_special_tokens({'bos_token': sos_token, 'eos_token': eos_token, 'unk_token': unk_token, 'pad_token': pad_token})
+        """
+        print("Tokenizer vocabulary size:", len(self.tokenizer))
         self.eos_re = re.compile(r'[\s]*[.?!]+[\s]*')        
 
         self.special_tokens = [sos_token, eos_token, pad_token, unk_token]
@@ -302,14 +351,13 @@ class TextData:
             else: # There is no cached vocab. Build vocabulary and preprocess text data
                 print('There is no cached vocab.')
                 vocab = self.build_word_vocabulary()
+                #vocab = None
                 self.preprocess_text(vocab)
+                save_pickle(vocab, self.vocab_path) 
 
         self.vocab = vocab
-
         self.data = {m: load_pickle(self.pickle_data_path[m]) for m in modes} 
-        if args.val_type == 'ch_only' :
-            self.data['val'] = load_pickle(get_data_path(args, mode='val_ch_only', ext='.pickle'))
-    
+
     # borrowed this implementation from load_glove of tvqa_dataset.py (TVQA),
     # which borrowed from @karpathy's neuraltalk.
     def build_word_vocabulary(self, word_count_threshold=0):
@@ -364,9 +412,9 @@ class TextData:
 
         # Remove words that have no Glove embedding vector, or speaker names.
         # Speaker names will be added later with random vectors. 
-        unk_words = [w for w in word_counts if w not in glove_keys or w.title() in speaker_name]
-        for w in unk_words:
-            del word_counts[w]
+        #unk_words = [w for w in word_counts if w not in glove_keys or w.title() in speaker_name]
+        #for w in unk_words:
+        #    del word_counts[w]
 
         n_glove_words = len(word_counts)
         n_unk_words = n_all_words - n_glove_words
@@ -426,13 +474,15 @@ class TextData:
 
             glove_matrix[i, :] = w_embed
 
-
+        
         print("Vocab embedding size is :", glove_matrix.shape)
+        """
         print('%d words are initialized with known GloVe vectors, '
               '%d words (names) are randomly initialized, '
               '%d words (%s) are initialized as 0, and '
               '%d words (%s) are initialized with %s GloVe vectors.' 
               % (n_glove, n_name, n_zero, pad_token, n_unk, ' '.join(unk_words), unk_token))
+        """
         print("Building vocabulary done.")
 
         vocab = Vocab(glove_matrix, idx2word, word2idx, self.special_tokens)
@@ -442,17 +492,22 @@ class TextData:
 
         return vocab
 
+
     def preprocess_text(self, vocab):
         print('Splitting long subtitles and converting words in text data to indices, timestamps from string to float.')
-        word2idx = vocab.stoi
         texts = self.raw_texts # self.raw_texts is assigned in self.build_word_vocabulary
         for text in texts.values():
             for e in text:
+                question = e['que']
+                answers = e['answers']
+
+                """
                 for k in self.line_keys:
-                    e[k] = self.line_to_indices(e[k], word2idx)
+                    e[k] = self.line_to_indices(e[k])
 
                 for k in self.list_keys:
-                    e[k] = [self.line_to_indices(line, word2idx) for line in e[k]]
+                    e[k] = [self.line_to_indices(line) for line in e[k]]
+                """
 
                 subtitle = e['subtitle']
 
@@ -466,7 +521,8 @@ class TextData:
                         sub['et'] = float(sub['et'])
                         sub['st'] = float(sub['st'])
                         sub['speaker'] = speaker_index[sub['speaker']] # to speaker index
-                        split_subs = self.split_subtitle(sub, to_indices=True, word2idx=word2idx)
+                        #split_subs = self.split_subtitle(sub, to_indices=True)
+                        split_subs = self.split_subtitle(sub, to_indices=False)
                         new_subs.extend(split_subs)
 
                     subtitle['contained_subs'] = new_subs
@@ -476,23 +532,6 @@ class TextData:
             save_pickle(texts[mode], self.pickle_data_path[mode])
 
         del self.raw_texts
-
-        self.extract_val_ch_only(texts['val'])
-
-    def extract_val_ch_only(self, data):
-        print('Extracting QAs that contains 5 different people in answer')
-
-        new_data = []
-        for qa in tqdm(data):
-            ans = qa['answers']
-            ans = [torch.tensor(ans[i], dtype=int_dtype) for i in range(5)]
-
-            persons = set(idx.item() for i in range(5) for idx in ans[i][ans[i] < n_speakers])
-
-            if len(persons) >= 5:
-                new_data.append(qa)
-
-        save_pickle(new_data, get_data_path(self.args, mode='val_ch_only', ext='.pickle'))
 
     # borrowed this implementation from TVQA (load_glove of tvqa_dataset.py)
     def load_glove(self, glove_path):
@@ -509,19 +548,17 @@ class TextData:
 
         return glove, embedding_dim
 
-    def split_subtitle(self, sub, sos=True, eos=True, to_indices=False, word2idx=None):
-        if to_indices == True and word2idx == None:
-            raise ValueError('word2idx should be given when to_indices is True')
-
+    def split_subtitle(self, sub, sos=True, eos=True, to_indices=False):
         n_special_tokens = sos + eos # True == 1, False == 0
         st, et = sub['st'], sub['et']
         t_range = et - st
         speaker = sub['speaker']
 
         utters = self.split_string(sub['utter'], sos=sos, eos=eos)
+        
         if to_indices:
-            utters = [self.words_to_indices(words, word2idx) for words in utters]
-
+            utters = [self.words_to_indices(words) for words in utters]
+        
         if len(utters) == 1: 
             sub['utter'] = utters[0]
 
@@ -533,8 +570,8 @@ class TextData:
         sts = [st] + list(ets[:-1])
 
         subs = [dict(speaker=speaker, st=s, et=e, utter=u) for s, e, u in zip(sts, ets, utters)]
-
-        return subs
+        return subs 
+        
 
     # Split a string with multiple sentences to multiple strings with one sentence.
     def split_string(self, string, min_sen_len=3, sos=True, eos=True):
@@ -582,25 +619,30 @@ class TextData:
         return string.strip()
 
     # borrowed this implementation from TVQA (line_to_words of tvqa_dataset.py)
-    def line_to_words(self, line, sos=True, eos=True, downcase=True):
-        line = self.clean_string(line)
-        tokens = self.tokenizer(line.lower()) if downcase else self.tokenizer(line)
-
+    def line_to_words(self, line, sos=True, eos=True, downcase=True, sos_token=sos_token, eos_token=eos_token, qa=False):
+        if qa:
+            q, a = line
+            q = self.clean_string(q)
+            a = self.clean_string(a)
+            q_tokens = self.tokenizer.tokenize(q)
+            a_tokens = self.tokenizer.tokenize(a)
+            tokens = q_tokens + [eos_token] + a_tokens
+        else:
+            line = self.clean_string(line)
+            tokens = self.tokenizer.tokenize(line) # BertTokenizer
+        
         words = [sos_token] if sos else []
         words = words + [w for w in tokens if w != ""]
         words = words + [eos_token] if eos else words
-
         return words
 
-    def words_to_indices(self, words, word2idx):
-        indices = [word2idx.get(w, word2idx[unk_token]) for w in words]
-
+    def words_to_indices(self, words):
+        indices = self.tokenizer.convert_tokens_to_ids(words) # RobertaTokenizer
         return indices
 
-    def line_to_indices(self, line, word2idx, sos=True, eos=True, downcase=True):
+    def line_to_indices(self, line, sos=True, eos=True, downcase=True):
         words = self.line_to_words(line, sos=sos, eos=eos, downcase=downcase)
-        indices = self.words_to_indices(words, word2idx)
-
+        indices = self.words_to_indices(words)
         return indices
 
     def merge_text_data(self):
@@ -618,7 +660,7 @@ def get_data_path(args, mode='train', ext='.json'):
     name = '_'.join(name)
     path = args.data_path.parent / name
     path = path.parent / (path.stem + ext)
-
+    print(path)
     return path
 
 class MultiModalData(Dataset):
@@ -631,6 +673,7 @@ class MultiModalData(Dataset):
 
         ###### Text ######
         self.text = text_data.data[mode]
+        self.tokenizer = text_data.tokenizer
         self.vocab = text_data.vocab
 
         ###### Image ######
@@ -641,11 +684,16 @@ class MultiModalData(Dataset):
         self.max_sen_len = args.max_sentence_len
         self.max_sub_len = args.max_sub_len
         self.max_image_len = args.max_image_len
+        self.max_text_len = args.max_text_len
 
         ###### Special indices ######
         self.none_index = speaker_index['None']
-        self.pad_index = self.vocab.get_index(pad_token)
-        self.eos_index = self.vocab.get_index(eos_token)
+        #self.pad_index = self.vocab.get_index(pad_token)
+        #self.eos_index = self.vocab.get_index(eos_token)
+        self.pad_index = self.tokenizer.convert_tokens_to_ids(pad_token)
+        self.eos_index = self.tokenizer.convert_tokens_to_ids(eos_token)
+        self.pad_token = pad_token
+        self.eos_token = eos_token
 
     def __len__(self):
         return len(self.text)
@@ -654,8 +702,9 @@ class MultiModalData(Dataset):
         text = self.text[idx]
         qid = text['qid']
         que = text['que']
-        ans = text['answers'] 
-        subtitle = text['subtitle']
+        ans = text['answers']
+        subtitle = text['subtitle']        
+         
         correct_idx = text['correct_idx'] if self.mode != 'test' else None
         q_level_logic = text['q_level_logic']
         shot_contained = text['shot_contained'] 
@@ -680,7 +729,7 @@ class MultiModalData(Dataset):
                 spkr_of_sen_l.append(spkr)
                 if len(utter) > self.max_sen_len:
                     del utter[self.max_sen_len:]
-                    utter[-1] = self.eos_index
+                    utter[-1] = self.eos_token
                 sub_in_sen_l.append(utter)
 
                 # # get image by st and et
@@ -696,7 +745,7 @@ class MultiModalData(Dataset):
                 # all_pfu_l.extend(all_pfu)
 
             # get image by shot_contained
-            mean_fi, all_fi, sample_v, all_v, all_pfu = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
+            mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
             mean_fi_l.append(mean_fi)
             all_fi_l.extend(all_fi)
             sample_v_l.append(sample_v)
@@ -704,8 +753,8 @@ class MultiModalData(Dataset):
             all_pfu_l.extend(all_pfu)
         else: # No subtitle
             spkr_of_sen_l.append(self.none_index) # add None speaker
-            sub_in_sen_l.append([self.pad_index]) # add <pad>
-            mean_fi, all_fi, sample_v, all_v, all_pfu = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
+            sub_in_sen_l.append([self.pad_token]) # add <pad>
+            mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
             mean_fi_l.append(mean_fi)
             all_fi_l.extend(all_fi)
             sample_v_l.append(sample_v)
@@ -725,9 +774,40 @@ class MultiModalData(Dataset):
 
             if n_words > max_sub_len:
                 del sub_in_word_l[max_sub_len:], spkr_of_word_l[max_sub_len:] 
-                sub_in_word_l[-1] = self.eos_index
+                sub_in_word_l[-1] = self.eos_token
 
                 break
+
+        # Create combined text input that appends question and subtitle
+        que_tokenized = self.tokenizer.tokenize(sos_token + que + eos_token) # tokenize question and add special tokens, sub is already tokenized
+        text = [que_tokenized] + sub_in_sen_l
+
+        # Mask tokens
+        masked = [self.mask_tokens(sentence, self.tokenizer, p=0.2) for sentence in text]
+        text_masked, labels = zip(*masked)
+        text_masked = list(text_masked)
+        labels = list(itertools.chain(*labels))
+
+        # Do not mask tokens for validation
+        if self.mode != 'train':
+            text_masked = text
+
+        # Encode masked tokens
+        text_masked = [word for sentence in text_masked for word in self.tokenizer.encode(sentence, add_special_tokens=False)]
+
+        # Cut down sequences that are too long
+        if len(text_masked) > self.max_text_len:
+            del text_masked[self.max_text_len:], labels[self.max_text_len:]
+            text_masked[-1] = self.eos_index
+            labels[-1] = -1
+
+        # Encode other textual inputs as usual using tokenizer
+        que = self.tokenizer.encode(que)
+        for i, answer in enumerate(ans):
+            ans[i] = self.tokenizer.encode(answer) 
+        sub_in_word_l = self.tokenizer.convert_tokens_to_ids(sub_in_word_l)
+        for idx, sentence in enumerate(sub_in_sen_l):
+            sub_in_sen_l[idx] = self.tokenizer.convert_tokens_to_ids(sentence)
 
         # Remove paddings in between and flatten visuals 
         filtered_v = []; filtered_fi = []; filtered_pfu = []
@@ -746,7 +826,7 @@ class MultiModalData(Dataset):
 
         # Pad empty data
         if not sub_in_word_l: # empty
-            sub_in_word_l.append(self.pad_index)
+            sub_in_word_l.append(self.pad_token)
             spkr_of_word_l.append(self.none_index)
 
         if not filtered_v: # empty: filtered_v, filtered_fi, and filtered_pfu are empty at the same time
@@ -765,12 +845,15 @@ class MultiModalData(Dataset):
             'spkr_of_sen': spkr_of_sen_l,
             'mean_fi': mean_fi_l,
             'sample_v': sample_v_l,
+            'text_masked': text_masked,
+            'labels': labels,
 
             'spkr_of_word': spkr_of_word_l,
             'sub_in_word': sub_in_word_l,
             'filtered_fi': filtered_fi,
             'filtered_v': filtered_v,
             'filtered_pfu': filtered_pfu,
+            'per_person_features': per_person_features,
 
             'q_level_logic': q_level_logic,
             'qid': qid
@@ -789,38 +872,33 @@ class MultiModalData(Dataset):
         que, que_l = self.pad2d(collected['que'], self.pad_index, int_dtype)
         ans, _, ans_l = self.pad3d(collected['ans'], self.pad_index, int_dtype)
         correct_idx = torch.tensor(collected['correct_idx'], dtype=int_dtype) if self.mode != 'test' else None # correct_idx does not have to be padded
-       
-        correct_answer_list = []
-        for idx, a in enumerate(ans):
-            correct_answer_tensor = torch.index_select(a, dim=0, index=correct_idx[idx])
-            correct_answer_list.append(correct_answer_tensor)
-        correct_answer = torch.stack(correct_answer_list, dim=0).squeeze()
-
-        correct_answer_len_list = []
-        for idx, a in enumerate(ans_l):
-            correct_answer_len_tensor = torch.index_select(a, dim=0, index=correct_idx[idx])
-            correct_answer_len_list.append(correct_answer_len_tensor)
-        correct_answer_len = torch.stack(correct_answer_len_list, dim=0).squeeze()
-
+        
         spkr_of_s, _ = self.pad2d(collected['spkr_of_sen'], self.none_index, int_dtype)
         mean_fi, _, _ = self.pad3d(collected['mean_fi'], 0, float_dtype)
         sample_v, _, _ = self.pad3d(collected['sample_v'], self.image.visual_pad, int_dtype)
         sub_in_s, sub_in_s_l, sub_s_l = self.pad3d(collected['sub_in_sen'], self.pad_index, int_dtype)
+        
+        text_masked, text_masked_l = self.pad2d(collected['text_masked'], self.pad_index, int_dtype)
+        labels, labels_l = self.pad2d(collected['labels'], self.pad_index, int_dtype)
 
         f_v, f_v_l = self.pad2d(collected['filtered_v'], self.image.visual_pad, int_dtype)
         f_fi, f_fi_l, _ = self.pad3d(collected['filtered_fi'], 0, float_dtype)
         f_pfu, f_pfu_l, _ = self.pad3d(collected['filtered_pfu'], 0, float_dtype) 
         spkr_of_w, _ = self.pad2d(collected['spkr_of_word'], self.none_index, int_dtype)
         sub_in_w, sub_in_w_l = self.pad2d(collected['sub_in_word'], self.pad_index, int_dtype)
+       
+        batch_size = len(collected['per_person_features'])
+        per_person_features = torch.zeros(batch_size, 21, 2048)
+        for frame_idx, frame in enumerate(collected['per_person_features']):
+            for person_idx in frame.keys():
+                per_person_features[frame_idx,person_idx] = torch.tensor(frame[person_idx])
 
         q_level_logic = collected['q_level_logic'] # No need to convert to torch.Tensor
         qid = collected['qid'] # No need to convert to torch.Tensor
         
         data = {
             'que': que,
-            'answers': ans, 
-            'correct_answer': correct_answer,
-            'correct_answer_len': correct_answer_len,
+            'answers': ans,
             'que_len': que_l,
             'ans_len': ans_l,
 
@@ -830,6 +908,11 @@ class MultiModalData(Dataset):
             'sample_visual': sample_v,
             'sub_len': sub_in_s_l,
             'sub_sentence_len': sub_s_l,
+            
+            'text_masked': text_masked,
+            'text_masked_l': text_masked_l,
+            'labels': labels,
+            'labels_l': labels_l,
 
             'filtered_visual': f_v,
             'filtered_sub': sub_in_w,
@@ -840,6 +923,7 @@ class MultiModalData(Dataset):
             'filtered_sub_len': sub_in_w_l,
             'filtered_image_len': f_fi_l,
             'filtered_person_full_len': f_pfu_l,
+            'per_person_features': per_person_features,
 
             'q_level_logic': q_level_logic,
             'qid': qid
@@ -849,6 +933,43 @@ class MultiModalData(Dataset):
             data['correct_idx'] = correct_idx 
 
         return data
+    
+    def mask_tokens(self, sequence, tokenizer, p=0.15):
+        """Masks tokens in a sequence with a given probability. Returns masked sequence along with a list of the ground-truth tokens that have been masked. Inspired by the original BERT paper, implementation borrowed from huggingface transformers."""
+        output_label = []
+        tokens = sequence.copy()
+        for i, token in enumerate(tokens):
+            prob = random.random()
+            # mask token with 15% probability
+            if prob < p:
+                prob /= p
+
+                # 80% randomly change token to mask token
+                if prob < 0.8:
+                    tokens[i] = mask_token
+
+                # 10% randomly change token to random token
+                elif prob < 0.9:
+                    tokens[i] = random.choice(list(tokenizer.get_vocab().items()))[0]
+                    #random_token = random.randint(0, tokenizer.vocab_size)
+                    #tokens[i] = random_token
+
+                # -> rest 10% randomly keep current token
+
+                # append current token to output (we will predict these later)
+                try:
+                    output_label.append(tokenizer.get_vocab()[token])
+                except KeyError:
+                    # We may be dealing with a special token (they are not included in the vocab)
+                    #idtokenizer.convert_ids_to_tokens(token)
+                    # For unknown words (should not occur with BPE vocab)
+                    output_label.append(tokenizer.get_vocab()[unk_token])
+                    print("Cannot find token '{}' in vocab. Using <unk> instead".format(token))
+            else:
+                # no masking token (will be ignored by loss function later)
+                output_label.append(-1)
+
+        return tokens, output_label
 
     def pad2d(self, data, pad_val, dtype):
         batch_size = len(data)
@@ -866,7 +987,6 @@ class MultiModalData(Dataset):
         for i in range(batch_size):
             d = torch.tensor(data[i], dtype=dtype)
             p_data[i, :len(d)] = d
-
         return p_data, p_length
 
     def pad3d(self, data, pad_val, dtype):
@@ -903,9 +1023,9 @@ def load_data(args, vocab=None):
     print('Loading text data')
     text = TextData(args, vocab)
     vocab = text.vocab
-
+    tokenizer = text.tokenizer
     print('Load image data')
-    image = ImageData(args, vocab)
+    image = ImageData(args, tokenizer)
 
     train_dataset = MultiModalData(args, text, image, mode='train')
     valid_dataset = MultiModalData(args, text, image, mode='val')
@@ -935,6 +1055,8 @@ def load_data(args, vocab=None):
         collate_fn=test_dataset.collate_fn
     )
 
+    #val_iter = extract_val_ch_only(args, val_iter)
+
     return {'train': train_iter, 'val': val_iter, 'test': test_iter}, vocab
 
 
@@ -944,3 +1066,18 @@ def get_iterator(args, vocab=None):
 
     return iters, vocab
 
+def extract_val_ch_only(args, data):
+    new_data = []
+
+    print('extract_ans_with_5_different_people')
+    for qa in tqdm(data):
+        ans = qa['answers']
+        ans = [torch.tensor(ans[i], dtype=int_dtype) for i in range(5)]
+
+        persons = set(idx.item() for i in range(5) for idx in ans[i][ans[i] < n_speakers])
+
+        if len(persons) >= 5:
+            new_data.append(qa)
+
+    save_pickle(new_data, get_data_path(args, mode='val_ch_only', ext='.pickle'))
+    return new_data

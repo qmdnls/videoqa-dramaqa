@@ -1,3 +1,6 @@
+from warnings import simplefilter 
+simplefilter(action='ignore', category=FutureWarning)
+
 from pathlib import Path
 import random
 

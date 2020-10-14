@@ -19,8 +19,8 @@ class MMTEncoder(nn.Module):
     
         #self.bert = BertModel.from_pretrained('bert-base-uncased')
 
-        encoder_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=12)
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=6)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=6)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=1)
         #self.transformer = nn.Transformer(d_model=n_dim, nhead=6)
 
         self.embedding = nn.Embedding(V, D)
@@ -199,8 +199,8 @@ class MMTEncoder(nn.Module):
         S = H_S
         M = H_M
         B = H_B
-        #Q = e_q
-        Q = torch.stack([q_c[i] for i in range(5)], dim=1)
+        Q = e_q
+        #Q = torch.stack([q_c[i] for i in range(5)], dim=1)
         F = features['images'].squeeze()
 
         """

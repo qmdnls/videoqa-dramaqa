@@ -21,9 +21,11 @@ def dict_for_each_episode():
     return [dict() for i in range(18 + 1)]  # episode index: from 1 to 18
 
 def get_model(args):
-    print('Loading extractor model: using resnet18')
+    #print('Loading extractor model: using resnet18')
+    print('Loading extractor model: using resnet152')
 
-    model = models.resnet18(pretrained=True)
+    #model = models.resnet18(pretrained=True)
+    model = models.resnet152(pretrained=True)
     extractor = nn.Sequential(*list(model.children())[:-2])
     extractor.to(args.device)
 

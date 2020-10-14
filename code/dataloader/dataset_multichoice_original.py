@@ -23,6 +23,7 @@ sos_token = '<sos>'
 eos_token = '<eos>'
 pad_token = '<pad>'
 unk_token = '<unk>'
+sep_token = '<sep>'
 
 speaker_name = [
     'None', # index 0: unknown speaker 
@@ -293,7 +294,7 @@ class TextData:
         self.tokenizer = get_tokenizer(args)
         self.eos_re = re.compile(r'[\s]*[.?!]+[\s]*')        
 
-        self.special_tokens = [sos_token, eos_token, pad_token, unk_token]
+        self.special_tokens = [sos_token, eos_token, pad_token, unk_token, sep_token]
 
         if vocab is None:
             if os.path.isfile(self.vocab_path): # Use cached vocab if it exists.
@@ -309,7 +310,12 @@ class TextData:
         self.data = {m: load_pickle(self.pickle_data_path[m]) for m in modes} 
         if args.val_type == 'ch_only' :
             self.data['val'] = load_pickle(get_data_path(args, mode='val_ch_only', ext='.pickle'))
-    
+        
+        # print special tokens
+        for t in self.special_tokens:
+            print(t, self.vocab.stoi.get(t, unk_token))
+
+
     # borrowed this implementation from load_glove of tvqa_dataset.py (TVQA),
     # which borrowed from @karpathy's neuraltalk.
     def build_word_vocabulary(self, word_count_threshold=0):
@@ -789,7 +795,19 @@ class MultiModalData(Dataset):
         que, que_l = self.pad2d(collected['que'], self.pad_index, int_dtype)
         ans, _, ans_l = self.pad3d(collected['ans'], self.pad_index, int_dtype)
         correct_idx = torch.tensor(collected['correct_idx'], dtype=int_dtype) if self.mode != 'test' else None # correct_idx does not have to be padded
-        
+       
+        correct_answer_list = []
+        for idx, a in enumerate(ans):
+            correct_answer_tensor = torch.index_select(a, dim=0, index=correct_idx[idx])
+            correct_answer_list.append(correct_answer_tensor)
+        correct_answer = torch.stack(correct_answer_list, dim=0).squeeze()
+
+        correct_answer_len_list = []
+        for idx, a in enumerate(ans_l):
+            correct_answer_len_tensor = torch.index_select(a, dim=0, index=correct_idx[idx])
+            correct_answer_len_list.append(correct_answer_len_tensor)
+        correct_answer_len = torch.stack(correct_answer_len_list, dim=0).squeeze()
+
         spkr_of_s, _ = self.pad2d(collected['spkr_of_sen'], self.none_index, int_dtype)
         mean_fi, _, _ = self.pad3d(collected['mean_fi'], 0, float_dtype)
         sample_v, _, _ = self.pad3d(collected['sample_v'], self.image.visual_pad, int_dtype)
@@ -807,6 +825,8 @@ class MultiModalData(Dataset):
         data = {
             'que': que,
             'answers': ans, 
+            'correct_answer': correct_answer,
+            'correct_answer_len': correct_answer_len,
             'que_len': que_l,
             'ans_len': ans_l,
 
