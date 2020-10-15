@@ -139,10 +139,7 @@ def train(args):
     def freeze_language_model(engine):
         for param in model.language_model.base_model.parameters():
             param.requires_grad = False
-        
-    for param in model.language_model.base_model.parameters():
-        param.requires_grad = False
-
+       
     @trainer.on(Events.STARTED)
     def on_training_started(engine):
         print("Begin Training")
