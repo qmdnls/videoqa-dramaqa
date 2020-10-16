@@ -31,7 +31,7 @@ def add_optims():
 
 def get_optimizer(args, model):
     optim = optim_dict[args.optimizer]
-    optim = optim.resolve_args(args, model.parameters())
+    optim = optim.resolve_args(args, model)
     optim.zero_grad()
     return optim
 

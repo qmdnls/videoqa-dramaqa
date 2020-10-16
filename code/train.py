@@ -135,11 +135,13 @@ def train(args):
     def evaluate_epoch(engine):
         log_results(logger, 'pretrain/epoch', engine.state, engine.state.epoch)
 
+    """
     @pretrainer.on(Events.COMPLETED)
     def freeze_language_model(engine):
         for param in model.language_model.base_model.parameters():
             param.requires_grad = False
-       
+    """
+
     @trainer.on(Events.STARTED)
     def on_training_started(engine):
         print("Begin Training")

@@ -18,12 +18,11 @@ class MMT_lm(nn.Module):
     
         #video_encoder_layer = nn.TransformerEncoderLayer(d_model=300, nhead=6, dim_feedforward=1024, dropout=0.1, activation='gelu')
         #self.video_encoder = nn.TransformerEncoder(video_encoder_layer, num_layers=1)
-        
-        multimodal_encoder_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=12, dim_feedforward=1024, dropout=0.1, activation='gelu')
+        self.video_encoder = nn.GRU(2048, 150, bidirectional=True, batch_first=True)
+
+        multimodal_encoder_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=6, dim_feedforward=1024, dropout=0.1, activation='gelu')
         self.transformer = nn.TransformerEncoder(multimodal_encoder_layer, num_layers=2)
         #self.transformer = nn.Transformer(d_model=n_dim, nhead=6)
-
-        
 
         self.embedding = nn.Embedding(V, D)
         n_dim = args.n_dim
@@ -34,14 +33,22 @@ class MMT_lm(nn.Module):
         #for param in self.language_model.base_model.parameters():
         #    param.requires_grad = False
 
-        self.cmat = ContextMatching(n_dim * 3) 
-        self.lstm_raw = RNNEncoder(300, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
+        # Update config to finetune token type embeddings
+        self.language_model.config.type_vocab_size = 2 
+
+        # Create a new Embeddings layer, with 2 possible segments IDs instead of 1
+        self.language_model.embeddings.token_type_embeddings = nn.Embedding(2, self.language_model.config.hidden_size)
+                
+        # Initialize it
+        self.language_model.embeddings.token_type_embeddings.weight.data.normal_(mean=0.0, std=self.language_model.config.initializer_range)
+
+        #self.cmat = ContextMatching(n_dim * 3) 
+        #self.lstm_raw = RNNEncoder(300, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
         self.lstm_script = RNNEncoder(321, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
         self.script_on = "script" in args.stream_type
         self.vbb_on = "visual_bb" in args.stream_type
         self.vmeta_on = "visual_meta" in args.stream_type
-        self.conv_pool = Conv1d(n_dim*4+1, n_dim*2)
-
+        #self.conv_pool = Conv1d(n_dim*4+1, n_dim*2)
 
         self.character = nn.Parameter(torch.randn(22, D, device=args.device, dtype=torch.float), requires_grad=True)
         self.norm1 = Norm(D)
@@ -52,9 +59,11 @@ class MMT_lm(nn.Module):
         self.char_classifier = nn.Linear(300, 21)
         self.mask_classifier = nn.Linear(300, self.tokenizer.vocab_size)
 
+        """
         self.output = nn.Sequential(
                 nn.Linear(5*300, 5),
                 nn.Softmax(dim=1))
+        """
 
         self.answer_rnn = nn.LSTM(300, 300, 1, batch_first=True, dropout=0)
 
@@ -151,6 +160,8 @@ class MMT_lm(nn.Module):
         batch_size = que.shape[0]
 
         text = features['text_masked']
+        text_lengths = features['text_masked_l']
+        token_type_ids = features['token_type_ids']
         #labels = features['labels']
 
         # -------------------------------- #
@@ -236,7 +247,8 @@ class MMT_lm(nn.Module):
         question = que
         script = features['filtered_sub']
         #text = torch.cat([question, script], dim=-1)
-        outputs = self.language_model(text)
+        attention_mask, _ = self.len_to_mask(text_lengths, text.shape[1])
+        outputs = self.language_model(text, token_type_ids=token_type_ids, attention_mask=attention_mask)
         text = outputs.last_hidden_state
         text = self.lang_proj(text)
 
@@ -244,6 +256,11 @@ class MMT_lm(nn.Module):
         video = features['filtered_person_full']
         video_length = video.size(1)
         video = self.visual_proj(video)
+        
+        # GRU video encoder
+        #video, _ = self.video_encoder(video)
+
+        # Transformer video encoder
         #video = video.permute(1,0,2)
         #video = self.video_encoder(video)
         #video = video.permute(1,0,2) 

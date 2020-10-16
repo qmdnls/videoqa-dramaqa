@@ -4,6 +4,7 @@ import torch
 import nltk
 import itertools
 import random
+from collections import OrderedDict
 from transformers import RobertaTokenizer
 
 from utils import *
@@ -185,6 +186,7 @@ class ImageData:
 
                 visual = visual_dict[frame]
                 processed_persons = master_dict[frame]['persons']
+                attributes = []
                 for person in visual["persons"]:
                     person_id = person['person_id'].title()
                     person_id_idx = self.none_index if person_id == '' else speaker_index[person_id] # none -> None
@@ -201,8 +203,14 @@ class ImageData:
                     #emotion_idx = self.pad_index if emotion == '' else self.vocab.get_index(emotion)
                     emotion_idx = self.pad_index if emotion == '' else self.tokenizer.encode(emotion, add_special_tokens=False)[0]
 
+                    attribute = person_id.title() + " " +  "feels" + " " + emotion.lower() + " " + "and" + " " + behavior.lower() + "."
+                    attributes.append(attribute)
+
                     processed = [person_id_idx, behavior_idx, emotion_idx] # Don't convert visual to a tensor yet
                     processed_persons.append(processed)
+
+                attributes = " ".join(attributes)
+                master_dict[frame]['attributes'] = attributes
 
                 # when processed_persons is empty, pfu_dict[frame] contains 
                 # full_image feature. Just ignore this.
@@ -249,6 +257,7 @@ class ImageData:
         all_v = []    # list of visuals              (aligned with person)
         sample_v = [] # first visual in the range
         per_person_features = defaultdict(list) # dict of features on a person-level rather than frame-level
+        all_attributes = [] # list of all attributes (behavior + emotion) on a frame level where each attribute is e.g. "Jiya feels sadness and stand up. Haeyoung1 feels angry and sit down"
 
         cur_id = start_frame_id
         added_8 = False
@@ -266,6 +275,10 @@ class ImageData:
 
                 pfu = frame['person_fulls']
                 all_pfu.extend(pfu)
+
+                if "attributes" in frame:
+                    frame_attributes = frame['attributes']
+                    all_attributes.append(frame_attributes)
 
                 for person, pfu in zip(p, pfu):
                     person_idx = person[0]
@@ -310,7 +323,7 @@ class ImageData:
         #per_person_features = list(per_person_features.values())
 
         # Don't convert visual to tensors yet
-        return mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features
+        return mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features, all_attributes
 
 
 class TextData:
@@ -745,7 +758,7 @@ class MultiModalData(Dataset):
                 # all_pfu_l.extend(all_pfu)
 
             # get image by shot_contained
-            mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
+            mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features, attributes = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
             mean_fi_l.append(mean_fi)
             all_fi_l.extend(all_fi)
             sample_v_l.append(sample_v)
@@ -754,7 +767,7 @@ class MultiModalData(Dataset):
         else: # No subtitle
             spkr_of_sen_l.append(self.none_index) # add None speaker
             sub_in_sen_l.append([self.pad_token]) # add <pad>
-            mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
+            mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features, attributes = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
             mean_fi_l.append(mean_fi)
             all_fi_l.extend(all_fi)
             sample_v_l.append(sample_v)
@@ -778,12 +791,19 @@ class MultiModalData(Dataset):
 
                 break
 
+        # Remove duplicate attributes
+        attributes = list(OrderedDict.fromkeys(attributes))
+
         # Create combined text input that appends question and subtitle
         que_tokenized = self.tokenizer.tokenize(sos_token + que + eos_token) # tokenize question and add special tokens, sub is already tokenized
-        text = [que_tokenized] + sub_in_sen_l
+        attributes_tokenized_l = [self.tokenizer.tokenize(sos_token + sentence + eos_token) for sentence in attributes] # tokenize attribute sentences as well and keep them in list
+        text = [que_tokenized] + attributes_tokenized_l + sub_in_sen_l
+
+        # Create token type ids
+        token_type_ids = len(que_tokenized) * [0] + sum([len(sentence) for sentence in sub_in_sen_l]) * [0.5] + sum([len(sentence) for sentence in attributes_tokenized_l]) * [1]
 
         # Mask tokens
-        masked = [self.mask_tokens(sentence, self.tokenizer, p=0.2) for sentence in text]
+        masked = [self.mask_tokens(sentence, self.tokenizer, p=0.15) for sentence in text]
         text_masked, labels = zip(*masked)
         text_masked = list(text_masked)
         labels = list(itertools.chain(*labels))
@@ -797,7 +817,7 @@ class MultiModalData(Dataset):
 
         # Cut down sequences that are too long
         if len(text_masked) > self.max_text_len:
-            del text_masked[self.max_text_len:], labels[self.max_text_len:]
+            del text_masked[self.max_text_len:], labels[self.max_text_len:], token_type_ids[self.max_text_len:]
             text_masked[-1] = self.eos_index
             labels[-1] = -1
 
@@ -846,6 +866,7 @@ class MultiModalData(Dataset):
             'mean_fi': mean_fi_l,
             'sample_v': sample_v_l,
             'text_masked': text_masked,
+            'token_type_ids': token_type_ids,
             'labels': labels,
 
             'spkr_of_word': spkr_of_word_l,
@@ -879,6 +900,7 @@ class MultiModalData(Dataset):
         sub_in_s, sub_in_s_l, sub_s_l = self.pad3d(collected['sub_in_sen'], self.pad_index, int_dtype)
         
         text_masked, text_masked_l = self.pad2d(collected['text_masked'], self.pad_index, int_dtype)
+        token_type_ids, _ = self.pad2d(collected['token_type_ids'], self.pad_index, int_dtype)
         labels, labels_l = self.pad2d(collected['labels'], self.pad_index, int_dtype)
 
         f_v, f_v_l = self.pad2d(collected['filtered_v'], self.image.visual_pad, int_dtype)
@@ -911,6 +933,7 @@ class MultiModalData(Dataset):
             
             'text_masked': text_masked,
             'text_masked_l': text_masked_l,
+            'token_type_ids': token_type_ids,
             'labels': labels,
             'labels_l': labels_l,
 
