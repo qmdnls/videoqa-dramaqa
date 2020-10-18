@@ -18,7 +18,7 @@ class MMT_lm(nn.Module):
     
         #video_encoder_layer = nn.TransformerEncoderLayer(d_model=300, nhead=6, dim_feedforward=1024, dropout=0.1, activation='gelu')
         #self.video_encoder = nn.TransformerEncoder(video_encoder_layer, num_layers=1)
-        self.video_encoder = nn.GRU(2048, 150, bidirectional=True, batch_first=True)
+        #self.video_encoder = nn.GRU(2048, 150, bidirectional=True, batch_first=True)
 
         multimodal_encoder_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=6, dim_feedforward=1024, dropout=0.5, activation='gelu')
         self.transformer = nn.TransformerEncoder(multimodal_encoder_layer, num_layers=2)
@@ -265,12 +265,18 @@ class MMT_lm(nn.Module):
         # encode video frames
         video = features['filtered_person_full']
         video_length = video.size(1)
-        #video = self.visual_proj(video)
+        video = self.visual_proj(video)
+        char = self.char_classifier(video)
         
         # GRU video encoder
         #video, _ = self.video_encoder(video)
+
+        # Attend video frames to text
+        video = video.permute(1,0,2)
+        text = text.permute(1,0,2)
         video, _ = self.mh_video(text, video, video)
-        char = self.char_classifier(video)
+        video = video.permute(1,0,2)
+        text = text.permute(1,0,2)
 
         # Transformer video encoder
         #video = video.permute(1,0,2)
@@ -282,7 +288,7 @@ class MMT_lm(nn.Module):
             #sep = torch.zeros(batch_size, 1, 300).cuda()
             #inpt = torch.cat([pad,Q,sep,a,sep,S,sep,M,sep,B,sep], dim=1)
             #inpt = torch.cat([Q,sep,a,sep,e_script,sep,per_person_features], dim=1)
-            inpt = torch.cat([text,video,M], dim=1)
+            inpt = torch.cat([text,video], dim=1)
             inpt = inpt.permute(1,0,2)
             out = self.transformer(inpt)
             out = out.permute(1,0,2)

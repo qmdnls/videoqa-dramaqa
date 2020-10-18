@@ -802,20 +802,15 @@ class MultiModalData(Dataset):
         # Create token type ids
         token_type_ids = len(que_tokenized) * [0] + sum([len(sentence) for sentence in sub_in_sen_l]) * [1] + sum([len(sentence) for sentence in attributes_tokenized_l]) * [2]
 
-        """
         # Mask tokens
         masked = [self.mask_tokens(sentence, self.tokenizer, p=0.15) for sentence in text]
         text_masked, labels = zip(*masked)
         text_masked = list(text_masked)
         labels = list(itertools.chain(*labels))
-        """
-        
-        text_masked = text
-        labels = len(text) * [-1]
-
 
         # Do not mask tokens for validation
         if self.mode != 'train':
+            print("In validation!", end="\r", flush=True)
             text_masked = text
             labels = len(text) * [-1]
 
