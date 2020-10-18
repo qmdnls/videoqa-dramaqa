@@ -34,13 +34,13 @@ class MMT_lm(nn.Module):
         #    param.requires_grad = False
 
         # Update config to finetune token type embeddings
-        self.language_model.config.type_vocab_size = 3 
+        #self.language_model.config.type_vocab_size = 3 
 
         # Create a new Embeddings layer, with 2 possible segments IDs instead of 1
-        self.language_model.embeddings.token_type_embeddings = nn.Embedding(3, self.language_model.config.hidden_size)
+        #self.language_model.embeddings.token_type_embeddings = nn.Embedding(3, self.language_model.config.hidden_size)
                 
         # Initialize it
-        self.language_model.embeddings.token_type_embeddings.weight.data.normal_(mean=0.0, std=self.language_model.config.initializer_range)
+        #self.language_model.embeddings.token_type_embeddings.weight.data.normal_(mean=0.0, std=self.language_model.config.initializer_range)
 
         # Freeze the first 6 layers
         #modules = [self.language_model.encoder.layer[:6]]
@@ -59,13 +59,15 @@ class MMT_lm(nn.Module):
         self.character = nn.Parameter(torch.randn(22, D, device=args.device, dtype=torch.float), requires_grad=True)
         self.norm1 = Norm(D)
 
-        self.mh_video = nn.MultiheadAttention(300, 6) 
-
         self.lang_proj = nn.Linear(768, 300)
         self.visual_proj = nn.Linear(2048, 300) 
+        
+        self.mh_video = nn.MultiheadAttention(300, 6) 
+        self.context_gru = nn.GRU(300, 150, bidirectional=True, batch_first=True)
 
         self.char_classifier = nn.Linear(300, 21)
         self.mask_classifier = nn.Linear(300, self.tokenizer.vocab_size)
+        self.alignment_classifier = nn.Linear(300, 1)
 
         """
         self.output = nn.Sequential(
@@ -258,7 +260,8 @@ class MMT_lm(nn.Module):
         script = features['filtered_sub']
         #text = torch.cat([question, script], dim=-1)
         attention_mask, _ = self.len_to_mask(text_lengths, text.shape[1])
-        outputs = self.language_model(text, token_type_ids=token_type_ids, attention_mask=attention_mask)
+        #outputs = self.language_model(text, token_type_ids=token_type_ids, attention_mask=attention_mask)
+        outputs = self.language_model(text, attention_mask=attention_mask)
         text = outputs.last_hidden_state
         text = self.lang_proj(text)
 
@@ -266,7 +269,7 @@ class MMT_lm(nn.Module):
         video = features['filtered_person_full']
         video_length = video.size(1)
         video = self.visual_proj(video)
-        char = self.char_classifier(video)
+        #char = self.char_classifier(video)
         
         # GRU video encoder
         #video, _ = self.video_encoder(video)
@@ -293,18 +296,26 @@ class MMT_lm(nn.Module):
             out = self.transformer(inpt)
             out = out.permute(1,0,2)
             #context = torch.mean(out, dim=1)
-            context = out[:,0,:]
+            #context = out[:,0,:]
             #choices.append(context)
+
+            # summarize output using GRU and get context
+            out, _ = self.context_gru(out)
+            context = out[:,-1,:]
 
         #choices = torch.cat(choices, dim=1)
         #scores = self.output(choices)
         
         # predict person contained in each bounding box
-        #char = self.char_classifier(context.unsqueeze(dim=1).repeat(1, video_length, 1))
+        char = self.char_classifier(context.unsqueeze(dim=1).repeat(1, video_length, 1))
         
         # predict masked tokens
         text_length = text.size(1)
         labels = self.mask_classifier(out[:,:text_length,:])
+
+        # predict lingo-visual alignment
+        alignment = self.alignment_classifier(context)
+        alignment = alignment.squeeze()
 
         num_options = 5
         hidden_dim = 300
@@ -331,7 +342,7 @@ class MMT_lm(nn.Module):
         scores = torch.sum(answers * context, 1)
         scores = scores.view(batch_size, num_options)
 
-        return scores, char, labels
+        return scores, char, labels, alignment
 
 
     def _generate_square_subsequent_mask(self, sz):
@@ -402,3 +413,73 @@ class Norm(nn.Module):
     def forward(self, x):
         norm = self.alpha * (x - x.mean(dim=-1, keepdim=True)) / (x.std(dim=-1, keepdim=True) + self.eps) + self.bias
         return norm
+
+class UtilityBlock(nn.Module):
+    """Efficient attention mechanism for many utilities block implemented for the visual dialog task (here: three utilities).
+    Args:
+        hidden_dim: dimension of the feature vector. Also the dimension of the final context vector provided to the decoder (required).
+        feedforward_dim: dimension of the hidden feedforward layer, implementation details from "Attention is all you need" (default=2048).
+        n_head: the number of heads in the multihead attention layers (default=8).
+        dropout: the dropout probability (default=0.1).
+    """
+    def __init__(self, hidden_dim, feedforward_dim=2048, n_head=8, dropout=0.1):
+        super(UtilityBlock, self).__init__()
+        self.multihead_attn = nn.MultiheadAttention(hidden_dim, n_head) # dropout? separate attention modules?
+        self.linear1 = nn.Linear(4*hidden_dim, feedforward_dim)
+        self.linear2 = nn.Linear(feedforward_dim, hidden_dim)
+        self.relu1 = nn.ReLU(feedforward_dim)
+        self.relu2 = nn.ReLU(hidden_dim)
+        self.dropout = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm([hidden_dim], elementwise_affine=False)
+
+    def forward(self, target, source):
+        """Passes the inputs through the utility attention block. For a detailed description see the paper. Inputs are tensors for each utility. The output is the updated utility tensor.
+        Args:
+            target: the target utility. The output will be of the same shape as this target utility.
+            source_a: the first source utility to attend to.
+            source_b: the second source utility to attend to.
+        """
+        # Permute to fit multihead attention input
+        target = target.permute(1,0,2)
+        source = source.permute(1,0,2)
+
+        # Apply multihead attention mechanism for target and multiple sources as described in the paper
+        out_t, _ = self.multihead_attn(target, target, target) # self attention for target utility
+        out_s, _ = self.multihead_attn(target, source, source) # attention to source utility a
+        
+        # Permute back to batch-first
+        target = target.permute(1,0,2)
+        out_t = out_t.permute(1,0,2)
+        out_s = out_s.permute(1,0,2)
+        
+        out = torch.cat((out_t, out_s), dim=2) # concatenate the resulting output tensors
+        out = self.relu1(self.linear1(out)) 
+        out = self.dropout(out)
+        out = self.relu2(self.linear2(out))
+        out = self.dropout(out)
+        out = self.norm(out + target) # add & norm (residual target)
+        return out
+
+class UtilityLayer(nn.Module):
+    """Efficient attention mechanism for many utilities layer implemented for the visual dialog task (here: three utilities). The layer consist of three parallel utility attention blocks.
+    Args:
+        hidden_dim: dimension of the feature vector. Also the dimension of the final context vector provided to the decoder (required).
+        feedforward_dim: dimension of the hidden feedforward layer, implementation details from "Attention is all you need" (default=2048).
+        n_head: the number of heads in the multihead attention layers (default=8).
+        dropout: the dropout probability (default=0.1).
+    """
+    def __init__(self, hidden_dim, feedforward_dim=1024, n_head=5, dropout=0.1):
+        super(UtilityLayer, self).__init__()
+        self.utility_t = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
+        self.utility_v = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
+
+    def forward(self, T, V):
+        """Passes the input utilities through the utility attention layer. Inputs are passed through their respective blocks in parallel. The output are the three updated utility tensors.
+        Args:
+            V: the visual utility tensor
+            Q: the question utility tensor
+            R: the history utility tensor
+        """
+        T_out = self.utility_t(T, V)
+        V_out = self.utility_v(V, T)
+        return T_out, V_out

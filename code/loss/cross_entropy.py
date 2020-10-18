@@ -18,9 +18,9 @@ from metric.stat_metric import StatMetric
 class CrossEntropyLoss(nn.CrossEntropyLoss):
     def __init__(self, eps=0, padding_idx=0):
         self.eps = eps
-        self.padding_idx = padding_idx
-
-        super(CrossEntropyLoss, self).__init__(ignore_index=padding_idx)
+        #self.padding_idx = padding_idx
+        #super(CrossEntropyLoss, self).__init__(ignore_index=padding_idx)
+        super(CrossEntropyLoss, self).__init__(ignore_index=-1)
 
     @staticmethod
     def get_metric():

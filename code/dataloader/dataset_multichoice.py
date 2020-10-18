@@ -712,7 +712,24 @@ class MultiModalData(Dataset):
         return len(self.text)
 
     def __getitem__(self, idx):
-        text = self.text[idx]
+        # By default video and text elements are aligned
+        vl_aligned = True
+
+        # With probability p however, we draw random text (question + subs)
+        p = 0.15
+        
+        # Draw a number
+        prob = random.random()
+
+        if prob < p:
+            # With probability p retrieve random textual data, get a random index to retrieve
+            idx = random.randint(self.__len__)
+            text = self.text[idx]
+            vl_aligned = False
+        else:
+            # With probability 1-p retrieve the correct textual data
+            text = self.text[idx]
+
         qid = text['qid']
         que = text['que']
         ans = text['answers']
@@ -803,14 +820,13 @@ class MultiModalData(Dataset):
         token_type_ids = len(que_tokenized) * [0] + sum([len(sentence) for sentence in sub_in_sen_l]) * [1] + sum([len(sentence) for sentence in attributes_tokenized_l]) * [2]
 
         # Mask tokens
-        masked = [self.mask_tokens(sentence, self.tokenizer, p=0.15) for sentence in text]
+        masked = [self.mask_tokens(sentence, self.tokenizer, p=0.5) for sentence in text]
         text_masked, labels = zip(*masked)
         text_masked = list(text_masked)
         labels = list(itertools.chain(*labels))
 
         # Do not mask tokens for validation
         if self.mode != 'train':
-            print("In validation!", end="\r", flush=True)
             text_masked = text
             labels = len(text) * [-1]
 
@@ -862,6 +878,7 @@ class MultiModalData(Dataset):
             'que': que,
             'ans': ans,
             'correct_idx': correct_idx,
+            'vl_aligned': vl_aligned,
 
             'sub_in_sen': sub_in_sen_l,
             'spkr_of_sen': spkr_of_sen_l,
@@ -895,7 +912,8 @@ class MultiModalData(Dataset):
         que, que_l = self.pad2d(collected['que'], self.pad_index, int_dtype)
         ans, _, ans_l = self.pad3d(collected['ans'], self.pad_index, int_dtype)
         correct_idx = torch.tensor(collected['correct_idx'], dtype=int_dtype) if self.mode != 'test' else None # correct_idx does not have to be padded
-        
+        vl_aligned = torch.tensor(collected['vl_aligned'], dtype=float_dtype)
+
         spkr_of_s, _ = self.pad2d(collected['spkr_of_sen'], self.none_index, int_dtype)
         mean_fi, _, _ = self.pad3d(collected['mean_fi'], 0, float_dtype)
         sample_v, _, _ = self.pad3d(collected['sample_v'], self.image.visual_pad, int_dtype)
@@ -925,6 +943,7 @@ class MultiModalData(Dataset):
             'answers': ans,
             'que_len': que_l,
             'ans_len': ans_l,
+            'vl_aligned': vl_aligned,
 
             'subtitle': sub_in_s, 
             'speaker': spkr_of_s, 
