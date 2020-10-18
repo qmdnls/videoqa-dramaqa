@@ -50,6 +50,7 @@ def get_evaluator(args, model, loss_fn, metrics={}):
             y_pred, char_pred, mask_pred = model(**net_inputs)
             batch_size = y_pred.shape[0]
 
+            """
             # get person ground truth and compute character loss
             n_char = 21
             visual_char = net_inputs['filtered_visual'].view(batch_size, -1, 3)[:,:,0]
@@ -64,12 +65,13 @@ def get_evaluator(args, model, loss_fn, metrics={}):
             mask_target = mask_target.view(-1)
             mask_pred = mask_pred.view(-1, vocab_size)
             mlm_loss = nn.CrossEntropyLoss(ignore_index=-1).cuda()(mask_pred, mask_target)
+            """
 
             # compute QA loss
             loss, stats = loss_fn(y_pred, target)
 
             # compute total loss
-            loss = loss + character_loss + mlm_loss
+            loss = loss #+ character_loss + mlm_loss
             vocab = model.vocab
             '''
             if sample_count < 100:

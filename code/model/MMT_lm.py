@@ -20,7 +20,7 @@ class MMT_lm(nn.Module):
         #self.video_encoder = nn.TransformerEncoder(video_encoder_layer, num_layers=1)
         self.video_encoder = nn.GRU(2048, 150, bidirectional=True, batch_first=True)
 
-        multimodal_encoder_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=6, dim_feedforward=1024, dropout=0.1, activation='gelu')
+        multimodal_encoder_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=6, dim_feedforward=1024, dropout=0.5, activation='gelu')
         self.transformer = nn.TransformerEncoder(multimodal_encoder_layer, num_layers=2)
         #self.transformer = nn.Transformer(d_model=n_dim, nhead=6)
 
@@ -34,13 +34,19 @@ class MMT_lm(nn.Module):
         #    param.requires_grad = False
 
         # Update config to finetune token type embeddings
-        self.language_model.config.type_vocab_size = 2 
+        self.language_model.config.type_vocab_size = 3 
 
         # Create a new Embeddings layer, with 2 possible segments IDs instead of 1
-        self.language_model.embeddings.token_type_embeddings = nn.Embedding(2, self.language_model.config.hidden_size)
+        self.language_model.embeddings.token_type_embeddings = nn.Embedding(3, self.language_model.config.hidden_size)
                 
         # Initialize it
         self.language_model.embeddings.token_type_embeddings.weight.data.normal_(mean=0.0, std=self.language_model.config.initializer_range)
+
+        # Freeze the first 6 layers
+        #modules = [self.language_model.encoder.layer[:6]]
+        #for module in modules:
+        #    for param in module.parameters():
+        #        param.requires_grad = False
 
         #self.cmat = ContextMatching(n_dim * 3) 
         #self.lstm_raw = RNNEncoder(300, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
@@ -52,6 +58,8 @@ class MMT_lm(nn.Module):
 
         self.character = nn.Parameter(torch.randn(22, D, device=args.device, dtype=torch.float), requires_grad=True)
         self.norm1 = Norm(D)
+
+        self.mh_video = nn.MultiheadAttention(300, 6) 
 
         self.lang_proj = nn.Linear(768, 300)
         self.visual_proj = nn.Linear(2048, 300) 
@@ -177,18 +185,20 @@ class MMT_lm(nn.Module):
             e_ans.append(embedded)
         #e_ans = torch.stack(embeddings)
         # -------------------------------- #
-        script = features['filtered_sub']
-        outputs = self.language_model(script)
-        e_script = outputs.last_hidden_state
-        e_script = self.lang_proj(e_script)
+        #script = features['filtered_sub']
+        #outputs = self.language_model(script)
+        #e_script = outputs.last_hidden_state
+        #e_script = self.lang_proj(e_script)
         # -------------------------------- #
 
+        """
         if self.script_on:
             s_len = features['filtered_sub_len']
             spk = features['filtered_speaker']
             spk_onehot = self._to_one_hot(spk, 21, mask=s_len)
             e_s = torch.cat([e_script, spk_onehot], dim=2)
             H_S, _ = self.lstm_script(e_s, s_len)
+        """
 
         if self.vmeta_on:
             vmeta = features['filtered_visual'].view(batch_size, -1, 3)
@@ -221,7 +231,7 @@ class MMT_lm(nn.Module):
             H_B, _ = self.lstm_vbb(e_vbb, vbb_len)
 
 
-        S = H_S
+        #S = H_S
         M = H_M
         B = H_B
         Q = e_q
@@ -255,10 +265,12 @@ class MMT_lm(nn.Module):
         # encode video frames
         video = features['filtered_person_full']
         video_length = video.size(1)
-        video = self.visual_proj(video)
+        #video = self.visual_proj(video)
         
         # GRU video encoder
         #video, _ = self.video_encoder(video)
+        video, _ = self.mh_video(text, video, video)
+        char = self.char_classifier(video)
 
         # Transformer video encoder
         #video = video.permute(1,0,2)
@@ -282,7 +294,7 @@ class MMT_lm(nn.Module):
         #scores = self.output(choices)
         
         # predict person contained in each bounding box
-        char = self.char_classifier(context.unsqueeze(dim=1).repeat(1, video_length, 1))
+        #char = self.char_classifier(context.unsqueeze(dim=1).repeat(1, video_length, 1))
         
         # predict masked tokens
         text_length = text.size(1)

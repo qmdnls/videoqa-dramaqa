@@ -18,7 +18,7 @@ config = {
     #'glove_path': "data/glove.840B.300d.txt", #"data/glove.6B.300d.txt", # "data/glove.6B.50d.txt"
     'vocab_path': "data/vocab.pickle",
     'val_type': 'all', # all | ch_only
-    'pretrain_epochs': 2,
+    'pretrain_epochs': 0,
     'max_epochs': 50,
     'num_workers': 40, 
     #'image_dim': 512,  # hardcoded for ResNet18
@@ -26,7 +26,7 @@ config = {
     'n_dim': 300,  
     'layers': 3,
     'dropout': 0.5,
-    'learning_rate': 1e-5, # pretrain: 1e-5, default: 1e-4
+    'learning_rate': 2e-5, # pretrain: 1e-5, default: 1e-4
     'weight_decay': 1e-5,
     'loss_name': 'cross_entropy_loss',
     'optimizer': 'adam',
