@@ -300,10 +300,11 @@ class MMT_lm(nn.Module):
             text_attended, video_attended, answer_attended = self.cross3(text_attended, video_attended, answer_attended)
             ctx_text = text_attended[:,0,:]
             ctx_video = video_attended[:,0,:]
-            ctx = ctx_text * ctx_video
+            ctx_answer = answer_attended[:,0,:]
+            ctx = ctx_text * ctx_video * ctx_answer
             context.append(ctx)
         ### END
-        context = torch.stack(context, dim=1)
+        context = self.context_proj(torch.cat(context, dim=-1))
 
         # predict person contained in each bounding box
         char = self.char_classifier(video)
@@ -314,9 +315,6 @@ class MMT_lm(nn.Module):
         #labels = self.mask_classifier(out[:,:text_length,:])
         labels = self.mask_classifier(text)
 
-        scores = self.output(context).squeeze()
-
-        """
         ### DISCRIMINATE DECODER
 
         num_options = 5
@@ -343,7 +341,7 @@ class MMT_lm(nn.Module):
         # compute scores
         scores = torch.sum(answers * context, 1)
         scores = scores.view(batch_size, num_options)
-        """        
+        
         return scores, char, labels 
 
 
