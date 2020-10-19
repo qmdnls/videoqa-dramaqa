@@ -708,28 +708,14 @@ class MultiModalData(Dataset):
         self.pad_token = pad_token
         self.eos_token = eos_token
 
+        ###### Meta ######
+        self.length = len(self.text)
+
     def __len__(self):
-        return len(self.text)
+        return self.length
 
     def __getitem__(self, idx):
-        # By default video and text elements are aligned
-        vl_aligned = True
-
-        # With probability p however, we draw random text (question + subs)
-        p = 0.15
-        
-        # Draw a number
-        prob = random.random()
-
-        if prob < p:
-            # With probability p retrieve random textual data, get a random index to retrieve
-            idx = random.randint(self.__len__)
-            text = self.text[idx]
-            vl_aligned = False
-        else:
-            # With probability 1-p retrieve the correct textual data
-            text = self.text[idx]
-
+        text = self.text[idx]
         qid = text['qid']
         que = text['que']
         ans = text['answers']
@@ -737,6 +723,25 @@ class MultiModalData(Dataset):
          
         correct_idx = text['correct_idx'] if self.mode != 'test' else None
         q_level_logic = text['q_level_logic']
+        
+        # By default video and text elements are aligned
+        vl_aligned = True
+
+        # With probability p however, we draw random video unaligned with the text
+        p = 0.25
+        
+        # Draw a number
+        prob = random.random()
+
+        if prob < p and self.mode == 'train':
+            # With probability p retrieve random textual data, get a random index to retrieve
+            idx = random.randint(0, self.__len__()-1)
+            text = self.text[idx]
+            vl_aligned = False
+        else:
+            # With probability 1-p retrieve the correct textual data
+            text = self.text[idx]
+
         shot_contained = text['shot_contained'] 
         vid = text['vid']
         episode = get_episode_id(vid)
@@ -820,15 +825,17 @@ class MultiModalData(Dataset):
         token_type_ids = len(que_tokenized) * [0] + sum([len(sentence) for sentence in sub_in_sen_l]) * [1] + sum([len(sentence) for sentence in attributes_tokenized_l]) * [2]
 
         # Mask tokens
-        masked = [self.mask_tokens(sentence, self.tokenizer, p=0.5) for sentence in text]
+        masked = [self.mask_tokens(sentence, self.tokenizer, p=0.2) for sentence in text]
         text_masked, labels = zip(*masked)
         text_masked = list(text_masked)
         labels = list(itertools.chain(*labels))
 
+        '''
         # Do not mask tokens for validation
         if self.mode != 'train':
             text_masked = text
             labels = len(text) * [-1]
+        '''
 
         # Encode masked tokens
         text_masked = [word for sentence in text_masked for word in self.tokenizer.encode(sentence, add_special_tokens=False)]

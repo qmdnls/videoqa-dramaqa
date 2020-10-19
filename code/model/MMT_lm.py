@@ -62,8 +62,10 @@ class MMT_lm(nn.Module):
         self.lang_proj = nn.Linear(768, 300)
         self.visual_proj = nn.Linear(2048, 300) 
         
-        self.mh_video = nn.MultiheadAttention(300, 6) 
-        self.context_gru = nn.GRU(300, 150, bidirectional=True, batch_first=True)
+        #self.mh_video = nn.MultiheadAttention(300, 6) 
+        #self.context_gru = nn.GRU(300, 150, bidirectional=True, batch_first=True)
+        self.cross1 = UtilityLayer(300)
+        self.context_proj = nn.Linear(5*300,300)
 
         self.char_classifier = nn.Linear(300, 21)
         self.mask_classifier = nn.Linear(300, self.tokenizer.vocab_size)
@@ -87,6 +89,7 @@ class MMT_lm(nn.Module):
         self.speaker_to_index = {name: index for index, name in enumerate(speaker_name)} 
         self.index_to_speaker = {v: k for k, v in self.speaker_to_index.items()}
 
+        '''
         if self.script_on:
             self.lstm_script = RNNEncoder(321, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
             self.classifier_script = nn.Sequential(nn.Linear(n_dim*2, 1), nn.Softmax(dim=1))
@@ -107,7 +110,7 @@ class MMT_lm(nn.Module):
             self.classifier_vbb = nn.Sequential(nn.Linear(n_dim*2, 1), nn.Softmax(dim=1))
 
             self.mhattn_vbb = CharMatching(4, D, D)
-
+        '''
 
 
     def _to_one_hot(self, y, n_dims, mask, dtype=torch.cuda.FloatTensor):
@@ -200,7 +203,6 @@ class MMT_lm(nn.Module):
             spk_onehot = self._to_one_hot(spk, 21, mask=s_len)
             e_s = torch.cat([e_script, spk_onehot], dim=2)
             H_S, _ = self.lstm_script(e_s, s_len)
-        """
 
         if self.vmeta_on:
             vmeta = features['filtered_visual'].view(batch_size, -1, 3)
@@ -233,7 +235,7 @@ class MMT_lm(nn.Module):
             H_B, _ = self.lstm_vbb(e_vbb, vbb_len)
 
 
-        #S = H_S
+        S = H_S
         M = H_M
         B = H_B
         Q = e_q
@@ -242,23 +244,8 @@ class MMT_lm(nn.Module):
         #video = features['filtered_image']
         #per_person_features = self.visual_proj(features['per_person_features'])
         #video = self.visual_proj(video)
-
-        """
-        print("------ SIZES -------")
-        print(S.size())
-        print(M.size())
-        print(B.size())
-        print(Q.size())
-        print(F.size())
-        print("--------------------")
         """
 
-        # compute context vector for decoder
-        #context = self.output(torch.cat([S, M, B, Q], dim=1))
-
-        question = que
-        script = features['filtered_sub']
-        #text = torch.cat([question, script], dim=-1)
         attention_mask, _ = self.len_to_mask(text_lengths, text.shape[1])
         #outputs = self.language_model(text, token_type_ids=token_type_ids, attention_mask=attention_mask)
         outputs = self.language_model(text, attention_mask=attention_mask)
@@ -275,43 +262,60 @@ class MMT_lm(nn.Module):
         #video, _ = self.video_encoder(video)
 
         # Attend video frames to text
-        video = video.permute(1,0,2)
-        text = text.permute(1,0,2)
-        video, _ = self.mh_video(text, video, video)
-        video = video.permute(1,0,2)
-        text = text.permute(1,0,2)
+        #video = video.permute(1,0,2)
+        #text = text.permute(1,0,2)
+        #video, _ = self.mh_video(text, video, video)
+        #video = video.permute(1,0,2)
+        #text = text.permute(1,0,2)
 
         # Transformer video encoder
         #video = video.permute(1,0,2)
         #video = self.video_encoder(video)
         #video = video.permute(1,0,2) 
 
+        '''
         #choices = []
         for a in e_ans:
             #sep = torch.zeros(batch_size, 1, 300).cuda()
             #inpt = torch.cat([pad,Q,sep,a,sep,S,sep,M,sep,B,sep], dim=1)
             #inpt = torch.cat([Q,sep,a,sep,e_script,sep,per_person_features], dim=1)
             inpt = torch.cat([text,video], dim=1)
-            inpt = inpt.permute(1,0,2)
+            inpt = inpt.permute(1,0,2) # sequence first
             out = self.transformer(inpt)
-            out = out.permute(1,0,2)
+            out = out.permute(1,0,2) # batch first
             #context = torch.mean(out, dim=1)
-            #context = out[:,0,:]
+            context = out[:,0,:]
             #choices.append(context)
 
             # summarize output using GRU and get context
-            out, _ = self.context_gru(out)
-            context = out[:,-1,:]
-
+            #out, _ = self.context_gru(out)
+            #context = out[:,-1,:]
+        
         #choices = torch.cat(choices, dim=1)
         #scores = self.output(choices)
-        
+        '''
+
+        ### CROSS-MODALITY UTILITY LAYER
+        context = []
+        for answer in e_ans:
+            text_attended, video_attended, _ = self.cross1(text, video, answer)
+            #text, video = self.cross2(text, video)
+            ctx_text, _ = torch.max(text_attended, dim=1)
+            ctx_video, _ = torch.max(video_attended, dim=1)
+            ctx = ctx_text * ctx_video
+            context.append(ctx)
+        ### END
+        context = torch.cat(context, dim=-1)
+        context = self.context_proj(context)
+
         # predict person contained in each bounding box
+        #char = self.char_classifier(video)
         char = self.char_classifier(context.unsqueeze(dim=1).repeat(1, video_length, 1))
         
         # predict masked tokens
-        text_length = text.size(1)
-        labels = self.mask_classifier(out[:,:text_length,:])
+        #text_length = text.size(1)
+        #labels = self.mask_classifier(out[:,:text_length,:])
+        labels = self.mask_classifier(text)
 
         # predict lingo-visual alignment
         alignment = self.alignment_classifier(context)
@@ -341,7 +345,7 @@ class MMT_lm(nn.Module):
         # compute scores
         scores = torch.sum(answers * context, 1)
         scores = scores.view(batch_size, num_options)
-
+        
         return scores, char, labels, alignment
 
 
@@ -425,14 +429,12 @@ class UtilityBlock(nn.Module):
     def __init__(self, hidden_dim, feedforward_dim=2048, n_head=8, dropout=0.1):
         super(UtilityBlock, self).__init__()
         self.multihead_attn = nn.MultiheadAttention(hidden_dim, n_head) # dropout? separate attention modules?
-        self.linear1 = nn.Linear(4*hidden_dim, feedforward_dim)
-        self.linear2 = nn.Linear(feedforward_dim, hidden_dim)
-        self.relu1 = nn.ReLU(feedforward_dim)
-        self.relu2 = nn.ReLU(hidden_dim)
+        self.linear = nn.Linear(3*hidden_dim, hidden_dim)
+        self.relu = nn.ReLU(hidden_dim)
         self.dropout = nn.Dropout(dropout)
         self.norm = nn.LayerNorm([hidden_dim], elementwise_affine=False)
 
-    def forward(self, target, source):
+    def forward(self, target, source_a, source_b):
         """Passes the inputs through the utility attention block. For a detailed description see the paper. Inputs are tensors for each utility. The output is the updated utility tensor.
         Args:
             target: the target utility. The output will be of the same shape as this target utility.
@@ -441,21 +443,27 @@ class UtilityBlock(nn.Module):
         """
         # Permute to fit multihead attention input
         target = target.permute(1,0,2)
-        source = source.permute(1,0,2)
+        source_a = source_a.permute(1,0,2)
+        source_b = source_b.permute(1,0,2)
 
         # Apply multihead attention mechanism for target and multiple sources as described in the paper
-        out_t, _ = self.multihead_attn(target, target, target) # self attention for target utility
-        out_s, _ = self.multihead_attn(target, source, source) # attention to source utility a
-        
+        #out_t, _ = self.multihead_attn(target, target, target) # self attention for target utility
+        out_a, _ = self.multihead_attn(target, source_a, source_a) # attention to source utility a
+        out_b, _ = self.multihead_attn(target, source_b, source_b) # attention to source utility b
+
         # Permute back to batch-first
         target = target.permute(1,0,2)
-        out_t = out_t.permute(1,0,2)
-        out_s = out_s.permute(1,0,2)
-        
-        out = torch.cat((out_t, out_s), dim=2) # concatenate the resulting output tensors
-        out = self.relu1(self.linear1(out)) 
-        out = self.dropout(out)
-        out = self.relu2(self.linear2(out))
+        #out_t = out_t.permute(1,0,2)
+        out_a = out_a.permute(1,0,2)
+        out_b = out_b.permute(1,0,2)
+       
+        # Add & norm
+        out_a = self.norm(out_a + target)
+        out_b = self.norm(out_b + target)
+
+        #out = torch.cat((out_t, out_a, out_b), dim=2) # concatenate the resulting output tensors
+        out = torch.cat([out_a, out_b], dim=2) # concatenate the resulting output tensors
+        out = self.relu(self.linear(out)) 
         out = self.dropout(out)
         out = self.norm(out + target) # add & norm (residual target)
         return out
@@ -472,14 +480,23 @@ class UtilityLayer(nn.Module):
         super(UtilityLayer, self).__init__()
         self.utility_t = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
         self.utility_v = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
+        self.utility_a = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
+        self.trm_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=h_head, dim_feedforward=feedforward_dim, dropout=dropout, activation='gelu')
+        self.trm_t = nn.TransformerEncoder(trm_layer, num_layers=1)
+        self.trm_v = nn.TransformerEncoder(trm_layer, num_layers=1)
+        self.trm_a = nn.TransformerEncoder(trm_layer, num_layers=1)
 
-    def forward(self, T, V):
+    def forward(self, T, V, A):
         """Passes the input utilities through the utility attention layer. Inputs are passed through their respective blocks in parallel. The output are the three updated utility tensors.
         Args:
             V: the visual utility tensor
             Q: the question utility tensor
             R: the history utility tensor
         """
-        T_out = self.utility_t(T, V)
-        V_out = self.utility_v(V, T)
-        return T_out, V_out
+        T_out = self.utility_t(T, V, A)
+        T_out = self.trm_t(T_out)
+        V_out = self.utility_v(V, T, A)
+        V_out = self.trm_v(V_out)
+        A_out = self.utility_a(A, T, V)
+        A_out = self.trm_a(A_out)
+        return T_out, V_out, A_out

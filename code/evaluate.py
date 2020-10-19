@@ -47,7 +47,7 @@ def get_evaluator(args, model, loss_fn, metrics={}):
             net_inputs, target = prepare_batch(args, batch, model.vocab)
             if net_inputs['subtitle'].nelement() == 0:
                 import ipdb; ipdb.set_trace()  # XXX DEBUG
-            y_pred, char_pred, mask_pred = model(**net_inputs)
+            y_pred, char_pred, mask_pred, alignment_pred = model(**net_inputs)
             batch_size = y_pred.shape[0]
 
             """
@@ -72,7 +72,7 @@ def get_evaluator(args, model, loss_fn, metrics={}):
 
             # compute total loss
             loss = loss #+ character_loss + mlm_loss
-            vocab = model.vocab
+            #vocab = model.vocab
             '''
             if sample_count < 100:
                 print('Batch %d: data and prediction from %d to %d' % (sample_count // batch_size, sample_count, sample_count + batch_size - 1))
@@ -145,7 +145,7 @@ def evaluate_by_logic_level(args, model, iterator, print_total=False):
             if net_inputs['subtitle'].nelement() == 0:
                 import ipdb; ipdb.set_trace()  # XXX DEBUG
 
-            y_pred, _, _ = model(**net_inputs)   
+            y_pred, _, _, _ = model(**net_inputs)   
             _, pred_idx = y_pred.max(dim=1)
             result = pred_idx == target
 
