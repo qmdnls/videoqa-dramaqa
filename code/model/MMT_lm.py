@@ -69,7 +69,6 @@ class MMT_lm(nn.Module):
 
         self.char_classifier = nn.Linear(300, 21)
         self.mask_classifier = nn.Linear(300, self.tokenizer.vocab_size)
-        self.alignment_classifier = nn.Linear(300, 1)
 
         """
         self.output = nn.Sequential(
@@ -317,10 +316,6 @@ class MMT_lm(nn.Module):
         #labels = self.mask_classifier(out[:,:text_length,:])
         labels = self.mask_classifier(text)
 
-        # predict lingo-visual alignment
-        alignment = self.alignment_classifier(context)
-        alignment = alignment.squeeze()
-
         num_options = 5
         hidden_dim = 300
 
@@ -346,7 +341,7 @@ class MMT_lm(nn.Module):
         scores = torch.sum(answers * context, 1)
         scores = scores.view(batch_size, num_options)
         
-        return scores, char, labels, alignment
+        return scores, char, labels 
 
 
     def _generate_square_subsequent_mask(self, sz):

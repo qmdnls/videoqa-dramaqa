@@ -18,21 +18,13 @@ def get_trainer(args, model, loss_fn, optimizer):
         model.train()
         optimizer.zero_grad()
         net_inputs, target = prepare_batch(args, batch, model.vocab)
-        y_pred, char_pred, mask_pred, alignment_pred = model(**net_inputs)
+        y_pred, char_pred, mask_pred = model(**net_inputs)
         batch_size = y_pred.shape[0] 
-
-        # get alignment ground truth
-        alignment_target = net_inputs['vl_aligned']
-        #alignment_loss = nn.BCEWithLogitsLoss().cuda()(alignment_pred, alignment_target)
-
-        # only compute other losses where video and text are aligned
-        loss_mask = alignment_target > 0
 
         # get person ground truth and compute character loss
         n_char = 21
         visual_char = net_inputs['filtered_visual'].view(batch_size, -1, 3)[:,:,0]
         char_target = visual_char.unsqueeze(2).view(batch_size, -1)
-        char_target[~loss_mask] = -1 # ignore all samples in batch that are not vl-aligned
         char_target = char_target.view(-1)
         char_pred = char_pred.view(-1, n_char)
         character_loss = nn.CrossEntropyLoss(ignore_index=-1).cuda()(char_pred, char_target)
@@ -40,13 +32,11 @@ def get_trainer(args, model, loss_fn, optimizer):
         # get ground truth labels and compute MLM loss
         vocab_size = mask_pred.size(-1)
         mask_target = net_inputs['labels']
-        mask_target[~loss_mask] = -1 # ignore all samples in batch that are not vl-aligned
         mask_target = mask_target.view(-1)
         mask_pred = mask_pred.view(-1, vocab_size)
         mlm_loss = nn.CrossEntropyLoss(ignore_index=-1).cuda()(mask_pred, mask_target)
 
         # compute QA loss
-        target[~loss_mask] = -1 # ignore all samples in batch that are not vl-aligned
         loss, stats = loss_fn(y_pred, target)
         
         # compute total loss
@@ -75,21 +65,13 @@ def get_pretrainer(args, model, loss_fn, optimizer):
         model.train()
         optimizer.zero_grad()
         net_inputs, target = prepare_batch(args, batch, model.vocab)
-        y_pred, char_pred, mask_pred, alignment_pred = model(**net_inputs)
+        y_pred, char_pred, mask_pred = model(**net_inputs)
         batch_size = y_pred.shape[0] 
         
-        # get alignment ground truth
-        alignment_target = net_inputs['vl_aligned']
-        #alignment_loss = nn.BCEWithLogitsLoss().cuda()(alignment_pred, alignment_target)
-
-        # only compute other losses where video and text are aligned
-        loss_mask = alignment_target > 0
-
         # get person ground truth and compute character loss
         n_char = 21
         visual_char = net_inputs['filtered_visual'].view(batch_size, -1, 3)[:,:,0]
         char_target = visual_char.unsqueeze(2).view(batch_size, -1)
-        char_target[~loss_mask] = -1 # ignore all samples in batch that are not vl-aligned
         char_target = char_target.view(-1)
         char_pred = char_pred.view(-1, n_char)
         character_loss = nn.CrossEntropyLoss(ignore_index=-1).cuda()(char_pred, char_target)
@@ -97,7 +79,6 @@ def get_pretrainer(args, model, loss_fn, optimizer):
         # get ground truth labels and compute MLM loss
         vocab_size = mask_pred.size(-1)
         mask_target = net_inputs['labels']
-        mask_target[~loss_mask] = -1 # ignore all samples in batch that are not vl-aligned
         mask_target = mask_target.view(-1)
         mask_pred = mask_pred.view(-1, vocab_size)
         mlm_loss = nn.CrossEntropyLoss(ignore_index=-1).cuda()(mask_pred, mask_target)
@@ -106,8 +87,7 @@ def get_pretrainer(args, model, loss_fn, optimizer):
         loss, stats = loss_fn(y_pred, target)
         
         # compute total loss
-        loss = character_loss + mlm_loss #+ alignment_loss
-        #loss = alignment_loss
+        loss = character_loss + mlm_loss
         loss.backward()
         optimizer.step()
         return loss.item(), stats, batch_size, y_pred.detach(), target.detach()

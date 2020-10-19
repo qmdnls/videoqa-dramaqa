@@ -720,28 +720,9 @@ class MultiModalData(Dataset):
         que = text['que']
         ans = text['answers']
         subtitle = text['subtitle']        
-         
         correct_idx = text['correct_idx'] if self.mode != 'test' else None
         q_level_logic = text['q_level_logic']
         
-        # By default video and text elements are aligned
-        vl_aligned = True
-
-        # With probability p however, we draw random video unaligned with the text
-        p = 0.25
-        
-        # Draw a number
-        prob = random.random()
-
-        if prob < p and self.mode == 'train':
-            # With probability p retrieve random textual data, get a random index to retrieve
-            idx = random.randint(0, self.__len__()-1)
-            text = self.text[idx]
-            vl_aligned = False
-        else:
-            # With probability 1-p retrieve the correct textual data
-            text = self.text[idx]
-
         shot_contained = text['shot_contained'] 
         vid = text['vid']
         episode = get_episode_id(vid)
@@ -885,7 +866,6 @@ class MultiModalData(Dataset):
             'que': que,
             'ans': ans,
             'correct_idx': correct_idx,
-            'vl_aligned': vl_aligned,
 
             'sub_in_sen': sub_in_sen_l,
             'spkr_of_sen': spkr_of_sen_l,
@@ -919,7 +899,6 @@ class MultiModalData(Dataset):
         que, que_l = self.pad2d(collected['que'], self.pad_index, int_dtype)
         ans, _, ans_l = self.pad3d(collected['ans'], self.pad_index, int_dtype)
         correct_idx = torch.tensor(collected['correct_idx'], dtype=int_dtype) if self.mode != 'test' else None # correct_idx does not have to be padded
-        vl_aligned = torch.tensor(collected['vl_aligned'], dtype=float_dtype)
 
         spkr_of_s, _ = self.pad2d(collected['spkr_of_sen'], self.none_index, int_dtype)
         mean_fi, _, _ = self.pad3d(collected['mean_fi'], 0, float_dtype)
@@ -950,7 +929,6 @@ class MultiModalData(Dataset):
             'answers': ans,
             'que_len': que_l,
             'ans_len': ans_l,
-            'vl_aligned': vl_aligned,
 
             'subtitle': sub_in_s, 
             'speaker': spkr_of_s, 
