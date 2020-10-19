@@ -70,11 +70,7 @@ class MMT_lm(nn.Module):
         self.char_classifier = nn.Linear(300, 21)
         self.mask_classifier = nn.Linear(300, self.tokenizer.vocab_size)
 
-        """
-        self.output = nn.Sequential(
-                nn.Linear(5*300, 5),
-                nn.Softmax(dim=1))
-        """
+        self.output = nn.Linear(300, 1)
 
         self.answer_rnn = nn.LSTM(300, 300, 1, batch_first=True, dropout=0)
 
@@ -299,22 +295,26 @@ class MMT_lm(nn.Module):
         for answer in e_ans:
             text_attended, video_attended, _ = self.cross1(text, video, answer)
             #text, video = self.cross2(text, video)
-            ctx_text, _ = torch.max(text_attended, dim=1)
-            ctx_video, _ = torch.max(video_attended, dim=1)
+            ctx_text = text_attended[:,0,:]
+            ctx_video = video_attended[:,0,:]
             ctx = ctx_text * ctx_video
             context.append(ctx)
         ### END
-        context = torch.cat(context, dim=-1)
-        context = self.context_proj(context)
+        context = torch.stack(context, dim=1)
 
         # predict person contained in each bounding box
-        #char = self.char_classifier(video)
-        char = self.char_classifier(context.unsqueeze(dim=1).repeat(1, video_length, 1))
+        char = self.char_classifier(video)
+        #char = self.char_classifier(context.unsqueeze(dim=1).repeat(1, video_length, 1))
         
         # predict masked tokens
         #text_length = text.size(1)
         #labels = self.mask_classifier(out[:,:text_length,:])
         labels = self.mask_classifier(text)
+
+        scores = self.output(context).squeeze()
+
+        """
+        ### DISCRIMINATE DECODER
 
         num_options = 5
         hidden_dim = 300
@@ -340,7 +340,7 @@ class MMT_lm(nn.Module):
         # compute scores
         scores = torch.sum(answers * context, 1)
         scores = scores.view(batch_size, num_options)
-        
+        """        
         return scores, char, labels 
 
 
@@ -424,7 +424,7 @@ class UtilityBlock(nn.Module):
     def __init__(self, hidden_dim, feedforward_dim=2048, n_head=8, dropout=0.1):
         super(UtilityBlock, self).__init__()
         self.multihead_attn = nn.MultiheadAttention(hidden_dim, n_head) # dropout? separate attention modules?
-        self.linear = nn.Linear(3*hidden_dim, hidden_dim)
+        self.linear = nn.Linear(2*hidden_dim, hidden_dim)
         self.relu = nn.ReLU(hidden_dim)
         self.dropout = nn.Dropout(dropout)
         self.norm = nn.LayerNorm([hidden_dim], elementwise_affine=False)
