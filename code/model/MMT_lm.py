@@ -481,10 +481,11 @@ class UtilityLayer(nn.Module):
         self.utility_t = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
         self.utility_v = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
         self.utility_a = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
-        self.trm_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=h_head, dim_feedforward=feedforward_dim, dropout=dropout, activation='gelu')
-        self.trm_t = nn.TransformerEncoder(trm_layer, num_layers=1)
-        self.trm_v = nn.TransformerEncoder(trm_layer, num_layers=1)
-        self.trm_a = nn.TransformerEncoder(trm_layer, num_layers=1)
+        self.norm = nn.LayerNorm(hidden_dim)
+        trm_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=n_head, dim_feedforward=feedforward_dim, dropout=dropout, activation='gelu')
+        self.trm_t = nn.TransformerEncoder(trm_layer, num_layers=1, norm=self.norm)
+        self.trm_v = nn.TransformerEncoder(trm_layer, num_layers=1, norm=self.norm)
+        self.trm_a = nn.TransformerEncoder(trm_layer, num_layers=1, norm=self.norm)
 
     def forward(self, T, V, A):
         """Passes the input utilities through the utility attention layer. Inputs are passed through their respective blocks in parallel. The output are the three updated utility tensors.
