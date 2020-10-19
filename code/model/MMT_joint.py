@@ -87,7 +87,6 @@ class MMT_joint(nn.Module):
         self.speaker_to_index = {name: index for index, name in enumerate(speaker_name)} 
         self.index_to_speaker = {v: k for k, v in self.speaker_to_index.items()}
 
-        '''
         if self.script_on:
             self.lstm_script = RNNEncoder(321, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
             self.classifier_script = nn.Sequential(nn.Linear(n_dim*2, 1), nn.Softmax(dim=1))
@@ -108,7 +107,6 @@ class MMT_joint(nn.Module):
             self.classifier_vbb = nn.Sequential(nn.Linear(n_dim*2, 1), nn.Softmax(dim=1))
 
             self.mhattn_vbb = CharMatching(4, D, D)
-        '''
 
 
     def _to_one_hot(self, y, n_dims, mask, dtype=torch.cuda.FloatTensor):
@@ -187,14 +185,12 @@ class MMT_joint(nn.Module):
             embedded = self.lang_proj(embedded)
             e_ans.append(embedded)
         
-        """
         if self.script_on:
             s_len = features['filtered_sub_len']
             spk = features['filtered_speaker']
             spk_onehot = self._to_one_hot(spk, 21, mask=s_len)
             e_s = torch.cat([e_script, spk_onehot], dim=2)
             H_S, _ = self.lstm_script(e_s, s_len)
-        """
 
         if self.vmeta_on:
             vmeta = features['filtered_visual'].view(batch_size, -1, 3)
@@ -214,7 +210,6 @@ class MMT_joint(nn.Module):
             #vp_flag = [(vp_flag[i] > 0).type(torch.cuda.FloatTensor) for i in range(5)]
             M, _ = self.lstm_vmeta(e_vbe, vmeta_len)
 
-        """
         if self.vbb_on:
             e_vbb = features['filtered_person_full']
             vbb_len = features['filtered_person_full_len']
@@ -228,16 +223,15 @@ class MMT_joint(nn.Module):
             H_B, _ = self.lstm_vbb(e_vbb, vbb_len)
 
 
-        S = H_S
-        M = H_M
-        B = H_B
-        Q = e_q
+        #S = H_S
+        #M = H_M
+        #B = H_B
+        #Q = e_q
         #Q = torch.stack([q_c[i] for i in range(5)], dim=1)
         #F = features['images'].squeeze()
         #video = features['filtered_image']
         #per_person_features = self.visual_proj(features['per_person_features'])
         #video = self.visual_proj(video)
-        """
 
         attention_mask, _ = self.len_to_mask(text_lengths, text.shape[1])
         #outputs = self.language_model(text, token_type_ids=token_type_ids, attention_mask=attention_mask)
@@ -248,10 +242,13 @@ class MMT_joint(nn.Module):
 
         # encode video frames
         video = features['filtered_person_full']
+        bb_lengths = features['filtered_person_full_len']
+        frame_person = features['filtered_visual'].view(batch_size, -1, 3)[:,:,0]
+        frame_person = frame_person.unsqueeze(2).view(batch_size, -1)
+        frame_person = self._to_one_hot(frame_person, 21, mask=bb_lengths)
+        video = torch.cat([video, frame_person], dim=-1)
         video_length = video.size(1)
-        #video = self.visual_proj(video)
-        
-        # GRU video encoder
+        #video = self.visual_proj(video) 
         video, _ = self.video_encoder(video)
  
         #inpt = torch.cat([Q,sep,a,sep,e_script,sep,per_person_features], dim=1)
