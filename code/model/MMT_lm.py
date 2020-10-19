@@ -42,11 +42,11 @@ class MMT_lm(nn.Module):
         # Initialize it
         #self.language_model.embeddings.token_type_embeddings.weight.data.normal_(mean=0.0, std=self.language_model.config.initializer_range)
 
-        # Freeze the first 6 layers
-        #modules = [self.language_model.encoder.layer[:6]]
-        #for module in modules:
-        #    for param in module.parameters():
-        #        param.requires_grad = False
+        # Freeze the first 10 layers
+        modules = [self.language_model.encoder.layer[:10]]
+        for module in modules:
+            for param in module.parameters():
+                param.requires_grad = False
 
         #self.cmat = ContextMatching(n_dim * 3) 
         #self.lstm_raw = RNNEncoder(300, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
@@ -65,6 +65,8 @@ class MMT_lm(nn.Module):
         #self.mh_video = nn.MultiheadAttention(300, 6) 
         #self.context_gru = nn.GRU(300, 150, bidirectional=True, batch_first=True)
         self.cross1 = UtilityLayer(300)
+        self.cross2 = UtilityLayer(300)
+        self.cross3 = UtilityLayer(300)
         self.context_proj = nn.Linear(5*300,300)
 
         self.char_classifier = nn.Linear(300, 21)
@@ -253,7 +255,7 @@ class MMT_lm(nn.Module):
         video = self.visual_proj(video)
         #char = self.char_classifier(video)
         
-        # GRU video encoder
+        # GRU video encoderuage-only
         #video, _ = self.video_encoder(video)
 
         # Attend video frames to text
@@ -293,8 +295,9 @@ class MMT_lm(nn.Module):
         ### CROSS-MODALITY UTILITY LAYER
         context = []
         for answer in e_ans:
-            text_attended, video_attended, _ = self.cross1(text, video, answer)
-            #text, video = self.cross2(text, video)
+            text_attended, video_attended, answer_attended = self.cross1(text, video, answer)
+            text_attended, video_attended, answer_attended = self.cross2(text_attended, video_attended, answer_attended)
+            text_attended, video_attended, answer_attended = self.cross3(text_attended, video_attended, answer_attended)
             ctx_text = text_attended[:,0,:]
             ctx_video = video_attended[:,0,:]
             ctx = ctx_text * ctx_video

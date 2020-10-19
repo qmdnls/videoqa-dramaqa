@@ -26,7 +26,7 @@ config = {
     'n_dim': 300,  
     'layers': 3,
     'dropout': 0.5,
-    'learning_rate': 1e-5, # pretrain: 1e-5, default: 1e-4
+    'learning_rate': 1e-4, # pretrain: 1e-5, default: 1e-4
     'weight_decay': 1e-5,
     'loss_name': 'cross_entropy_loss',
     'optimizer': 'adam',
