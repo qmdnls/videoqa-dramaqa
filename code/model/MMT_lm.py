@@ -42,11 +42,11 @@ class MMT_lm(nn.Module):
         # Initialize it
         #self.language_model.embeddings.token_type_embeddings.weight.data.normal_(mean=0.0, std=self.language_model.config.initializer_range)
 
-        # Freeze the first 10 layers
-        modules = [self.language_model.encoder.layer[:10]]
-        for module in modules:
-            for param in module.parameters():
-                param.requires_grad = False
+        # Freeze the first 6 layers
+        #modules = [self.language_model.encoder.layer[:6]]
+        #for module in modules:
+        #    for param in module.parameters():
+        #        param.requires_grad = False
 
         #self.cmat = ContextMatching(n_dim * 3) 
         #self.lstm_raw = RNNEncoder(300, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
@@ -65,16 +65,16 @@ class MMT_lm(nn.Module):
         #self.mh_video = nn.MultiheadAttention(300, 6) 
         #self.context_gru = nn.GRU(300, 150, bidirectional=True, batch_first=True)
         self.cross1 = UtilityLayer(300)
-        self.cross2 = UtilityLayer(300)
-        self.cross3 = UtilityLayer(300)
-        self.context_proj = nn.Linear(5*300,300)
+        #self.cross2 = UtilityLayer(300)
 
         self.char_classifier = nn.Linear(300, 21)
         self.mask_classifier = nn.Linear(300, self.tokenizer.vocab_size)
 
-        self.output = nn.Linear(300, 1)
+        self.video_cls = nn.Linear(300, 1)
+        self.language_cls = nn.Linear(300,1)
+        #self.joint_cls = nn.Linear(300, 1)
 
-        self.answer_rnn = nn.LSTM(300, 300, 1, batch_first=True, dropout=0)
+        #self.answer_rnn = nn.LSTM(300, 300, 1, batch_first=True, dropout=0)
 
         speaker_name = [ 
             'None', # index 0: unknown speaker 
@@ -143,55 +143,7 @@ class MMT_lm(nn.Module):
         return x_sum > 0
 
     def forward(self, que, answers, **features):
-        '''
-        filtered_sub (B, max_sub_len)
-        filtered_sub_len (B)
-        filtered_speaker (B, max_sub_len)
-
-        filtered_visual (B, max_v_len*3)
-        filtered_visual_len (B)
-
-        filtered_image (B, max_v_len, 512)
-        filtered_image_len (12)
-
-        que (B, max_que_len)
-        que_len (B)
-
-        answers (B, 5, max_ans_len)
-        ans_len (B, 5)
-        
-        print(que.shape)
-        print(answers.shape)
-        for key, value in features.items():
-            print(key, value.shape)
-            
-
-        '''
         batch_size = que.shape[0]
-
-        text = features['text_masked']
-        text_lengths = features['text_masked_l']
-        token_type_ids = features['token_type_ids']
-        #labels = features['labels']
-
-        # -------------------------------- #
-        outputs = self.language_model(que)
-        e_q = outputs.last_hidden_state
-        e_q = self.lang_proj(e_q)
-        # -------------------------------- #
-        e_ans = []
-        for i in range(5):
-            outputs = self.language_model(answers[:,i,:])
-            embedded = outputs.last_hidden_state
-            embedded = self.lang_proj(embedded)
-            e_ans.append(embedded)
-        #e_ans = torch.stack(embeddings)
-        # -------------------------------- #
-        #script = features['filtered_sub']
-        #outputs = self.language_model(script)
-        #e_script = outputs.last_hidden_state
-        #e_script = self.lang_proj(e_script)
-        # -------------------------------- #
 
         """
         if self.script_on:
@@ -242,22 +194,36 @@ class MMT_lm(nn.Module):
         #per_person_features = self.visual_proj(features['per_person_features'])
         #video = self.visual_proj(video)
         """
+        
+        text = features['text_masked']
+        text_length = text.size(1)
+        token_type_ids = features['token_type_ids']
 
-        attention_mask, _ = self.len_to_mask(text_lengths, text.shape[1])
-        #outputs = self.language_model(text, token_type_ids=token_type_ids, attention_mask=attention_mask)
-        outputs = self.language_model(text, attention_mask=attention_mask)
-        text = outputs.last_hidden_state
-        text = self.lang_proj(text)
+        # encode the text using roberta
+        e_ans = []
+        for i in range(5):
+            answer = answers[:,i,:]
+            text_answer = torch.cat([text, answer], dim=-1)
+            outputs = self.language_model(text_answer)
+            embedded = outputs.last_hidden_state
+            embedded = self.lang_proj(embedded)
+            e_ans.append(embedded)
+
+        # stack the text-answers pairs
+        text = torch.stack(e_ans, dim=1)
+
+        # predict the masked tokens @@ UNCOMMENT THIS
+        #labels = self.mask_classifier(text[:,0,:text_length,:])
 
         # encode video frames
         video = features['filtered_person_full']
         video_length = video.size(1)
         video = self.visual_proj(video)
-        #char = self.char_classifier(video)
         
-        # GRU video encoderuage-only
-        #video, _ = self.video_encoder(video)
-
+        # predict person contained in each bounding box @@ UNCOMMENT THIS
+        #char = self.char_classifier(video)
+        #char = self.char_classifier(context.unsqueeze(dim=1).repeat(1, video_length, 1))
+        
         # Attend video frames to text
         #video = video.permute(1,0,2)
         #text = text.permute(1,0,2)
@@ -268,80 +234,42 @@ class MMT_lm(nn.Module):
         # Transformer video encoder
         #video = video.permute(1,0,2)
         #video = self.video_encoder(video)
-        #video = video.permute(1,0,2) 
-
-        '''
-        #choices = []
-        for a in e_ans:
-            #sep = torch.zeros(batch_size, 1, 300).cuda()
-            #inpt = torch.cat([pad,Q,sep,a,sep,S,sep,M,sep,B,sep], dim=1)
-            #inpt = torch.cat([Q,sep,a,sep,e_script,sep,per_person_features], dim=1)
-            inpt = torch.cat([text,video], dim=1)
-            inpt = inpt.permute(1,0,2) # sequence first
-            out = self.transformer(inpt)
-            out = out.permute(1,0,2) # batch first
-            #context = torch.mean(out, dim=1)
-            context = out[:,0,:]
-            #choices.append(context)
-
-            # summarize output using GRU and get context
-            #out, _ = self.context_gru(out)
-            #context = out[:,-1,:]
-        
-        #choices = torch.cat(choices, dim=1)
-        #scores = self.output(choices)
-        '''
+        #video = video.permute(1,0,2)
 
         ### CROSS-MODALITY UTILITY LAYER
         context = []
-        for answer in e_ans:
-            text_attended, video_attended, answer_attended = self.cross1(text, video, answer)
-            text_attended, video_attended, answer_attended = self.cross2(text_attended, video_attended, answer_attended)
-            text_attended, video_attended, answer_attended = self.cross3(text_attended, video_attended, answer_attended)
-            ctx_text = text_attended[:,0,:]
-            ctx_video = video_attended[:,0,:]
-            ctx_answer = answer_attended[:,0,:]
-            ctx = ctx_text * ctx_video * ctx_answer
-            context.append(ctx)
-        ### END
-        context = self.context_proj(torch.cat(context, dim=-1))
+        for i in range(5):
+            text_input = text[:,i,:,:]
+            text_context, video_context = self.cross1(text_input, video)
+            #text_context, video_context = self.cross2(text_context, video_context)
+            context.append((text_context, video_context))
+            del text_input
+        text_context, video_context = zip(*context)
+        del context
+        
+        # stack text and video context and maxpool
+        video_context = torch.stack(video_context, dim=1)
+        video_context, _ = torch.max(video_context, dim=2)
+        text_context = torch.stack(text_context, dim=1)
+        label_prediction_context, _ = torch.max(text_context, dim=1)
+        char_prediction_context, _ = torch.max(video_context, dim=1)
+        text_context, _ = torch.max(text_context, dim=2)
+     
+        # predict masked tokens
+        labels = self.mask_classifier(label_prediction_context[:,:text_length,:])
+
+        # classify answers @@ UNCOMMENT THIS
+        visual_score = self.video_cls(video_context).squeeze()
+        language_score = self.language_cls(text_context).squeeze()
+        scores = visual_score + language_score
+        
+        #context = text_context * video_context
+        #scores = self.joint_cls(context).squeeze()
 
         # predict person contained in each bounding box
-        char = self.char_classifier(video)
-        #char = self.char_classifier(context.unsqueeze(dim=1).repeat(1, video_length, 1))
+        char = self.char_classifier(char_prediction_context.unsqueeze(dim=1).repeat(1, video_length, 1))
         
-        # predict masked tokens
-        #text_length = text.size(1)
-        #labels = self.mask_classifier(out[:,:text_length,:])
-        labels = self.mask_classifier(text)
 
-        ### DISCRIMINATE DECODER
-
-        num_options = 5
-        hidden_dim = 300
-
-        # stack answers
-        e_ans = torch.stack(e_ans) 
-
-        # run through lstm
-        e_ans = e_ans.reshape(batch_size * num_options, -1, hidden_dim)
-        answers, _ = self.answer_rnn(e_ans)
-        answers = answers[:,-1,:]
-        answers = answers.reshape(num_options, batch_size, hidden_dim)
-
-        # batch first
-        answers = answers.permute(1,0,2)
-
-        # shape the context so it is the same as the answers
-        context = context.unsqueeze(dim=1).repeat(1, num_options, 1)
-
-        answers = answers.contiguous().view(batch_size * num_options, hidden_dim)
-        context = context.contiguous().view(batch_size * num_options, hidden_dim)
-
-        # compute scores
-        scores = torch.sum(answers * context, 1)
-        scores = scores.view(batch_size, num_options)
-        
         return scores, char, labels 
 
 
@@ -430,7 +358,7 @@ class UtilityBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.norm = nn.LayerNorm([hidden_dim], elementwise_affine=False)
 
-    def forward(self, target, source_a, source_b):
+    def forward(self, target, source_a):
         """Passes the inputs through the utility attention block. For a detailed description see the paper. Inputs are tensors for each utility. The output is the updated utility tensor.
         Args:
             target: the target utility. The output will be of the same shape as this target utility.
@@ -440,25 +368,25 @@ class UtilityBlock(nn.Module):
         # Permute to fit multihead attention input
         target = target.permute(1,0,2)
         source_a = source_a.permute(1,0,2)
-        source_b = source_b.permute(1,0,2)
+        #source_b = source_b.permute(1,0,2)
 
         # Apply multihead attention mechanism for target and multiple sources as described in the paper
-        #out_t, _ = self.multihead_attn(target, target, target) # self attention for target utility
+        out_t, _ = self.multihead_attn(target, target, target) # self attention for target utility
         out_a, _ = self.multihead_attn(target, source_a, source_a) # attention to source utility a
-        out_b, _ = self.multihead_attn(target, source_b, source_b) # attention to source utility b
+        #out_b, _ = self.multihead_attn(target, source_b, source_b) # attention to source utility b
 
         # Permute back to batch-first
         target = target.permute(1,0,2)
-        #out_t = out_t.permute(1,0,2)
+        out_t = out_t.permute(1,0,2)
         out_a = out_a.permute(1,0,2)
-        out_b = out_b.permute(1,0,2)
+        #out_b = out_b.permute(1,0,2)
        
         # Add & norm
         out_a = self.norm(out_a + target)
-        out_b = self.norm(out_b + target)
+        #out_b = self.norm(out_b + target)
 
         #out = torch.cat((out_t, out_a, out_b), dim=2) # concatenate the resulting output tensors
-        out = torch.cat([out_a, out_b], dim=2) # concatenate the resulting output tensors
+        out = torch.cat([out_t, out_a], dim=2) # concatenate the resulting output tensors
         out = self.relu(self.linear(out)) 
         out = self.dropout(out)
         out = self.norm(out + target) # add & norm (residual target)
@@ -476,24 +404,20 @@ class UtilityLayer(nn.Module):
         super(UtilityLayer, self).__init__()
         self.utility_t = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
         self.utility_v = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
-        self.utility_a = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
-        self.norm = nn.LayerNorm(hidden_dim)
-        trm_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=n_head, dim_feedforward=feedforward_dim, dropout=dropout, activation='gelu')
-        self.trm_t = nn.TransformerEncoder(trm_layer, num_layers=1, norm=self.norm)
-        self.trm_v = nn.TransformerEncoder(trm_layer, num_layers=1, norm=self.norm)
-        self.trm_a = nn.TransformerEncoder(trm_layer, num_layers=1, norm=self.norm)
+        #self.norm = nn.LayerNorm(hidden_dim)
+        #trm_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=n_head, dim_feedforward=feedforward_dim, dropout=dropout, activation='gelu')
+        #self.trm_t = nn.TransformerEncoder(trm_layer, num_layers=1, norm=self.norm)
+        #self.trm_v = nn.TransformerEncoder(trm_layer, num_layers=1, norm=self.norm)
 
-    def forward(self, T, V, A):
+    def forward(self, T, V):
         """Passes the input utilities through the utility attention layer. Inputs are passed through their respective blocks in parallel. The output are the three updated utility tensors.
         Args:
             V: the visual utility tensor
             Q: the question utility tensor
             R: the history utility tensor
         """
-        T_out = self.utility_t(T, V, A)
-        T_out = self.trm_t(T_out)
-        V_out = self.utility_v(V, T, A)
-        V_out = self.trm_v(V_out)
-        A_out = self.utility_a(A, T, V)
-        A_out = self.trm_a(A_out)
-        return T_out, V_out, A_out
+        T_out = self.utility_t(T, V)
+        #T_out = self.trm_t(T_out)
+        V_out = self.utility_v(V, T)
+        #V_out = self.trm_v(V_out)
+        return T_out, V_out

@@ -5,7 +5,7 @@ config = {
     #'tokenizer': 'nltk',
     'tokenizer': 'nonword', # 'nltk' # need to check
     #'tokenizer': 'bert',
-    'batch_sizes':  (8, 8, 8), # (16, 24, 12)
+    'batch_sizes':  (4, 4, 4), # (16, 24, 12)
     'lower': True,
     'use_inputs':['que','answers','subtitle','speaker','images','sample_visual','filtered_visual','filtered_sub','filtered_speaker','filtered_image','que_len','ans_len','sub_len','filtered_visual_len','filtered_sub_len','filtered_image_len', 'filtered_person_full', 'filtered_person_full_len','per_person_features','text_masked','text_masked_l','token_type_ids','labels','labels_l','q_level_logic'],
     'stream_type': ['visual_meta'], # default: ['script', 'visual_bb', 'visual_meta']
@@ -26,7 +26,7 @@ config = {
     'n_dim': 300,  
     'layers': 3,
     'dropout': 0.5,
-    'learning_rate': 1e-4, # pretrain: 1e-5, default: 1e-4
+    'learning_rate': 1e-5, # pretrain: 1e-5, default: 1e-4
     'weight_decay': 1e-5,
     'loss_name': 'cross_entropy_loss',
     'optimizer': 'adam',

@@ -341,7 +341,7 @@ class TextData:
         self.json_data_path = {m: get_data_path(args, mode=m, ext='.json') for m in modes}
         self.pickle_data_path = {m: get_data_path(args, mode=m, ext='.pickle') for m in modes}
         self.raw_texts = {mode: load_json(self.json_data_path[mode]) for mode in modes}
-        
+
         #self.tokenizer = get_tokenizer(args)
         self.tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
         """
@@ -678,14 +678,19 @@ def get_data_path(args, mode='train', ext='.json'):
 
 class MultiModalData(Dataset):
     def __init__(self, args, text_data, image_data, mode):
-        if mode not in modes:
+        if mode not in modes + ['pretrain']: # ugly hack to allow pretraining mode
             raise ValueError("mode should be %s." % (' or '.join(modes)))
 
         self.args = args
         self.mode = mode
+        # If we are pretraining, use the same settings as we would for training so load the following data with mode = 'train'
+        if self.mode == 'pretrain':
+            data_mode = 'train'
+        else:
+            data_mode = self.mode
 
         ###### Text ######
-        self.text = text_data.data[mode]
+        self.text = text_data.data[data_mode]
         self.tokenizer = text_data.tokenizer
         self.vocab = text_data.vocab
 
@@ -800,23 +805,21 @@ class MultiModalData(Dataset):
         # Create combined text input that appends question and subtitle
         que_tokenized = self.tokenizer.tokenize(sos_token + que + eos_token) # tokenize question and add special tokens, sub is already tokenized
         attributes_tokenized_l = [self.tokenizer.tokenize(sos_token + sentence + eos_token) for sentence in attributes] # tokenize attribute sentences as well and keep them in list
-        text = [que_tokenized] + attributes_tokenized_l + sub_in_sen_l
+        text = [que_tokenized] + attributes_tokenized_l + sub_in_sen_l 
 
         # Create token type ids
         token_type_ids = len(que_tokenized) * [0] + sum([len(sentence) for sentence in sub_in_sen_l]) * [1] + sum([len(sentence) for sentence in attributes_tokenized_l]) * [2]
 
         # Mask tokens
-        masked = [self.mask_tokens(sentence, self.tokenizer, p=0.2) for sentence in text]
+        masked = [self.mask_tokens(sentence, self.tokenizer, p=0.3) for sentence in text]
         text_masked, labels = zip(*masked)
         text_masked = list(text_masked)
         labels = list(itertools.chain(*labels))
 
-        '''
         # Do not mask tokens for validation
-        if self.mode != 'train':
+        if self.mode not in ['train', 'pretrain']:
             text_masked = text
             labels = len(text) * [-1]
-        '''
 
         # Encode masked tokens
         text_masked = [word for sentence in text_masked for word in self.tokenizer.encode(sentence, add_special_tokens=False)]
@@ -906,7 +909,7 @@ class MultiModalData(Dataset):
         sub_in_s, sub_in_s_l, sub_s_l = self.pad3d(collected['sub_in_sen'], self.pad_index, int_dtype)
         
         text_masked, text_masked_l = self.pad2d(collected['text_masked'], self.pad_index, int_dtype)
-        token_type_ids, _ = self.pad2d(collected['token_type_ids'], self.pad_index, int_dtype)
+        token_type_ids, _ = self.pad2d(collected['token_type_ids'], 4, int_dtype)
         labels, labels_l = self.pad2d(collected['labels'], self.pad_index, int_dtype)
 
         f_v, f_v_l = self.pad2d(collected['filtered_v'], self.image.visual_pad, int_dtype)
@@ -1056,10 +1059,19 @@ def load_data(args, vocab=None):
     print('Load image data')
     image = ImageData(args, tokenizer)
 
+    pretrain_dataset = MultiModalData(args, text, image, mode='pretrain')
     train_dataset = MultiModalData(args, text, image, mode='train')
     valid_dataset = MultiModalData(args, text, image, mode='val')
     test_dataset  = MultiModalData(args, text, image, mode='test')
 
+    pretrain_iter = DataLoader(
+        pretrain_dataset, 
+        batch_size=args.batch_sizes[0],
+        shuffle=args.shuffle[0], 
+        num_workers=args.num_workers,
+        collate_fn=pretrain_dataset.collate_fn
+    )
+    
     train_iter = DataLoader(
         train_dataset, 
         batch_size=args.batch_sizes[0],
@@ -1086,7 +1098,7 @@ def load_data(args, vocab=None):
 
     #val_iter = extract_val_ch_only(args, val_iter)
 
-    return {'train': train_iter, 'val': val_iter, 'test': test_iter}, vocab
+    return {'train': train_iter, 'val': val_iter, 'test': test_iter, 'pretrain': pretrain_iter}, vocab
 
 
 def get_iterator(args, vocab=None):

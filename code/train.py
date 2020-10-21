@@ -15,6 +15,7 @@ from torch import nn
 
 def get_trainer(args, model, loss_fn, optimizer):
     def update_model(trainer, batch):
+        args.pretraining = False
         model.train()
         optimizer.zero_grad()
         net_inputs, target = prepare_batch(args, batch, model.vocab)
@@ -40,7 +41,7 @@ def get_trainer(args, model, loss_fn, optimizer):
         loss, stats = loss_fn(y_pred, target)
         
         # compute total loss
-        #loss = loss + 0.1 * character_loss + 0.1 * mlm_loss 
+        loss = loss + character_loss + mlm_loss
         loss.backward()
         optimizer.step()
         return loss.item(), stats, batch_size, y_pred.detach(), target.detach()
@@ -161,5 +162,5 @@ def train(args):
         evaluate_by_logic_level(args, model, iterator=iters['val'])
 
     if args.pretrain_epochs > 0:
-        pretrainer.run(iters['train'], max_epochs=args.pretrain_epochs) 
+        pretrainer.run(iters['pretrain'], max_epochs=args.pretrain_epochs) 
     trainer.run(iters['train'], max_epochs=args.max_epochs)
