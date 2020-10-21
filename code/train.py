@@ -18,7 +18,7 @@ def get_trainer(args, model, loss_fn, optimizer):
         args.pretraining = False
         model.train()
         optimizer.zero_grad()
-        net_inputs, target = prepare_batch(args, batch, model.vocab)
+        net_inputs, target = prepare_batch(args, batch, model.module.vocab)
         y_pred, char_pred, mask_pred = model(**net_inputs)
         batch_size = y_pred.shape[0] 
 
@@ -65,7 +65,7 @@ def get_pretrainer(args, model, loss_fn, optimizer):
         args.pretraining = True
         model.train()
         optimizer.zero_grad()
-        net_inputs, target = prepare_batch(args, batch, model.vocab)
+        net_inputs, target = prepare_batch(args, batch, model.module.vocab)
         y_pred, char_pred, mask_pred = model(**net_inputs)
         batch_size = y_pred.shape[0] 
         
@@ -140,14 +140,13 @@ def train(args):
     """
     @pretrainer.on(Events.COMPLETED)
     def unfreeze_language_model(engine):
-        for param in model.language_model.base_model.parameters():
+        for param in model.module.language_model.base_model.parameters():
             param.requires_grad = True
     """
 
     @trainer.on(Events.STARTED)
     def on_training_started(engine):
         print("Begin Training")
-        evaluate_by_logic_level(args, model, iterator=iters['val'])
 
     @trainer.on(Events.ITERATION_COMPLETED)
     def log_iter_results(engine):

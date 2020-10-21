@@ -44,7 +44,7 @@ def get_evaluator(args, model, loss_fn, metrics={}):
 
         model.eval()
         with torch.no_grad():
-            net_inputs, target = prepare_batch(args, batch, model.vocab)
+            net_inputs, target = prepare_batch(args, batch, model.module.vocab)
             if net_inputs['subtitle'].nelement() == 0:
                 import ipdb; ipdb.set_trace()  # XXX DEBUG
             y_pred, char_pred, mask_pred = model(**net_inputs)
@@ -71,7 +71,7 @@ def get_evaluator(args, model, loss_fn, metrics={}):
             loss, stats = loss_fn(y_pred, target)
 
             # compute total loss
-            loss = loss #+ character_loss + mlm_loss
+            #loss = loss + character_loss + mlm_loss
             #vocab = model.vocab
             '''
             if sample_count < 100:
@@ -131,7 +131,7 @@ def evaluate_once(evaluator, iterator):
 def evaluate_by_logic_level(args, model, iterator, print_total=False):
     from tqdm import tqdm
 
-    vocab = model.vocab
+    vocab = model.module.vocab
     model.eval()
 
     cor_que_n = torch.zeros(5) # level: 1 ~ 4 (0: pad)
@@ -146,7 +146,6 @@ def evaluate_by_logic_level(args, model, iterator, print_total=False):
                 import ipdb; ipdb.set_trace()  # XXX DEBUG
 
             y_pred, _, _ = model(**net_inputs)
-            print(y_pred.size())
             _, pred_idx = y_pred.max(dim=1)
             result = pred_idx == target
 
@@ -202,7 +201,7 @@ def qa_similarity(args):
 
     iters, vocab = get_iterator(args)
     iterator = iters['val']
-    model.vocab = vocab
+    model.module.vocab = vocab
     model.eval = lambda: None
     vocab = torch.from_numpy(vocab).to(args.device)
 

@@ -21,8 +21,8 @@ class MMT_lm(nn.Module):
         #self.video_encoder = nn.TransformerEncoder(video_encoder_layer, num_layers=1)
         #self.video_encoder = nn.GRU(2048, 150, bidirectional=True, batch_first=True)
 
-        multimodal_encoder_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=6, dim_feedforward=1024, dropout=0.5, activation='gelu')
-        self.transformer = nn.TransformerEncoder(multimodal_encoder_layer, num_layers=2)
+        #multimodal_encoder_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=6, dim_feedforward=1024, dropout=0.5, activation='gelu')
+        #self.transformer = nn.TransformerEncoder(multimodal_encoder_layer, num_layers=2)
         #self.transformer = nn.Transformer(d_model=n_dim, nhead=6)
 
         self.embedding = nn.Embedding(V, D)
@@ -51,14 +51,14 @@ class MMT_lm(nn.Module):
 
         #self.cmat = ContextMatching(n_dim * 3) 
         #self.lstm_raw = RNNEncoder(300, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
-        self.lstm_script = RNNEncoder(321, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
+        #self.lstm_script = RNNEncoder(321, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
         self.script_on = "script" in args.stream_type
         self.vbb_on = "visual_bb" in args.stream_type
         self.vmeta_on = "visual_meta" in args.stream_type
         #self.conv_pool = Conv1d(n_dim*4+1, n_dim*2)
 
-        self.character = nn.Parameter(torch.randn(22, D, device=args.device, dtype=torch.float), requires_grad=True)
-        self.norm1 = Norm(D)
+        #self.character = nn.Parameter(torch.randn(22, D, device=args.device, dtype=torch.float), requires_grad=True)
+        #self.norm1 = Norm(D)
 
         self.lang_proj = nn.Linear(768, 300)
         self.visual_proj = nn.Linear(2048, 300) 

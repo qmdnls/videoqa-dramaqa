@@ -30,7 +30,7 @@ def get_model(args, vocab):
     #print(model_dict)
     model = model_dict[args.model_name]
     model = model.resolve_args(args, vocab).to(args.device)
-    #model = nn.DataParallel(model)
+    model = nn.DataParallel(model)
     return model
 
 
