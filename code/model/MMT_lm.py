@@ -15,7 +15,8 @@ class MMT_lm(nn.Module):
         V = len(vocab)
         D = n_dim
         self.hidden_dim = n_dim
-    
+        self.num_choice = num_choice
+
         #video_encoder_layer = nn.TransformerEncoderLayer(d_model=300, nhead=6, dim_feedforward=1024, dropout=0.1, activation='gelu')
         #self.video_encoder = nn.TransformerEncoder(video_encoder_layer, num_layers=1)
         #self.video_encoder = nn.GRU(2048, 150, bidirectional=True, batch_first=True)
@@ -34,13 +35,13 @@ class MMT_lm(nn.Module):
         #    param.requires_grad = False
 
         # Update config to finetune token type embeddings
-        #self.language_model.config.type_vocab_size = 3 
+        self.language_model.config.type_vocab_size = 5 
 
         # Create a new Embeddings layer, with 2 possible segments IDs instead of 1
-        #self.language_model.embeddings.token_type_embeddings = nn.Embedding(3, self.language_model.config.hidden_size)
+        self.language_model.embeddings.token_type_embeddings = nn.Embedding(5, self.language_model.config.hidden_size)
                 
         # Initialize it
-        #self.language_model.embeddings.token_type_embeddings.weight.data.normal_(mean=0.0, std=self.language_model.config.initializer_range)
+        self.language_model.embeddings.token_type_embeddings.weight.data.normal_(mean=0.0, std=self.language_model.config.initializer_range)
 
         # Freeze the first 6 layers
         #modules = [self.language_model.encoder.layer[:6]]
@@ -198,13 +199,17 @@ class MMT_lm(nn.Module):
         text = features['text_masked']
         text_length = text.size(1)
         token_type_ids = features['token_type_ids']
+        answer_length = answers.size(2)
+        answer_type_ids = batch_size * [answer_length * [3]]
+        answer_type_ids = torch.tensor(answer_type_ids, dtype=torch.long).cuda()
+        token_type_ids = torch.cat([token_type_ids, answer_type_ids], dim=1)
 
         # encode the text using roberta
         e_ans = []
         for i in range(5):
             answer = answers[:,i,:]
             text_answer = torch.cat([text, answer], dim=-1)
-            outputs = self.language_model(text_answer)
+            outputs = self.language_model(text_answer, token_type_ids=token_type_ids)
             embedded = outputs.last_hidden_state
             embedded = self.lang_proj(embedded)
             e_ans.append(embedded)
@@ -400,7 +405,7 @@ class UtilityLayer(nn.Module):
         n_head: the number of heads in the multihead attention layers (default=8).
         dropout: the dropout probability (default=0.1).
     """
-    def __init__(self, hidden_dim, feedforward_dim=1024, n_head=5, dropout=0.1):
+    def __init__(self, hidden_dim, feedforward_dim=1024, n_head=5, dropout=0.5):
         super(UtilityLayer, self).__init__()
         self.utility_t = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)
         self.utility_v = UtilityBlock(hidden_dim, feedforward_dim, n_head, dropout)

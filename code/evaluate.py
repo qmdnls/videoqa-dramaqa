@@ -145,7 +145,8 @@ def evaluate_by_logic_level(args, model, iterator, print_total=False):
             if net_inputs['subtitle'].nelement() == 0:
                 import ipdb; ipdb.set_trace()  # XXX DEBUG
 
-            y_pred, _, _ = model(**net_inputs)   
+            y_pred, _, _ = model(**net_inputs)
+            print(y_pred.size())
             _, pred_idx = y_pred.max(dim=1)
             result = pred_idx == target
 

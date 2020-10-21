@@ -712,6 +712,7 @@ class MultiModalData(Dataset):
         self.eos_index = self.tokenizer.convert_tokens_to_ids(eos_token)
         self.pad_token = pad_token
         self.eos_token = eos_token
+        self.token_type_pad = 4
 
         ###### Meta ######
         self.length = len(self.text)
@@ -811,13 +812,13 @@ class MultiModalData(Dataset):
         token_type_ids = len(que_tokenized) * [0] + sum([len(sentence) for sentence in sub_in_sen_l]) * [1] + sum([len(sentence) for sentence in attributes_tokenized_l]) * [2]
 
         # Mask tokens
-        masked = [self.mask_tokens(sentence, self.tokenizer, p=0.3) for sentence in text]
+        masked = [self.mask_tokens(sentence, self.tokenizer, p=0.15) for sentence in text]
         text_masked, labels = zip(*masked)
         text_masked = list(text_masked)
         labels = list(itertools.chain(*labels))
 
         # Do not mask tokens for validation
-        if self.mode not in ['train', 'pretrain']:
+        if self.mode != 'train':
             text_masked = text
             labels = len(text) * [-1]
 
@@ -909,7 +910,7 @@ class MultiModalData(Dataset):
         sub_in_s, sub_in_s_l, sub_s_l = self.pad3d(collected['sub_in_sen'], self.pad_index, int_dtype)
         
         text_masked, text_masked_l = self.pad2d(collected['text_masked'], self.pad_index, int_dtype)
-        token_type_ids, _ = self.pad2d(collected['token_type_ids'], 4, int_dtype)
+        token_type_ids, _ = self.pad2d(collected['token_type_ids'], self.token_type_pad, int_dtype)
         labels, labels_l = self.pad2d(collected['labels'], self.pad_index, int_dtype)
 
         f_v, f_v_l = self.pad2d(collected['filtered_v'], self.image.visual_pad, int_dtype)

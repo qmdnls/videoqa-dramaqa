@@ -41,7 +41,7 @@ def get_trainer(args, model, loss_fn, optimizer):
         loss, stats = loss_fn(y_pred, target)
         
         # compute total loss
-        loss = loss + character_loss + mlm_loss
+        #loss = loss + 0.1 * character_loss + 0.1 * mlm_loss
         loss.backward()
         optimizer.step()
         return loss.item(), stats, batch_size, y_pred.detach(), target.detach()
@@ -147,6 +147,7 @@ def train(args):
     @trainer.on(Events.STARTED)
     def on_training_started(engine):
         print("Begin Training")
+        evaluate_by_logic_level(args, model, iterator=iters['val'])
 
     @trainer.on(Events.ITERATION_COMPLETED)
     def log_iter_results(engine):

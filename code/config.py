@@ -34,10 +34,10 @@ config = {
     'log_cmd': False,
     'ckpt_path': 'data/ckpt',
     'ckpt_name': None,
-    'max_sentence_len': 30,
-    'max_sub_len': 200,
-    'max_text_len': 220,
-    'max_image_len': 100,
+    'max_sentence_len': 40,
+    'max_sub_len': 270,
+    'max_text_len': 300,
+    'max_image_len': 300,
     'shuffle': (True, False, False),
     'ckpt': 3
 }

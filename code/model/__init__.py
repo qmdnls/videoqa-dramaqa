@@ -29,8 +29,9 @@ def add_models():
 def get_model(args, vocab):
     #print(model_dict)
     model = model_dict[args.model_name]
-    model = model.resolve_args(args, vocab)
-    return model.to(args.device)
+    model = model.resolve_args(args, vocab).to(args.device)
+    #model = nn.DataParallel(model)
+    return model
 
 
 add_models()
