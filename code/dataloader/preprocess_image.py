@@ -252,14 +252,24 @@ def extract_objects(tensor, detector, device):
     hook.remove()
     # filter to keep top K = 15 highest scoring objects
     objects = [{key: frame[key][:15] for key in frame} for frame in objects]
-    selected_rois = detector.roi_heads.box_roi_pool(outputs[0], [o['boxes'] for o in objects], [i.shape[-2:] for i in tensor]) # K x 256 x 7 x 7 
-    selected_rois = mean_pool(selected_rois, -1)  # K x 256 x 7
-    selected_rois = mean_pool(selected_rois, -1)  # K X 256
-    # keep a max of 36 objects
-    selected_rois = selected_rois[:36, :] # 36 X 256 we keep a max of 36 objects
-    objects = objects[:36]
+    
+    ''' Extraction example for single image (i.e. not a batch)
+    #selected_rois = detector.roi_heads.box_roi_pool(outputs[0], [o['boxes'] for o in objects], [i.shape[-2:] for i in tensor]) # K x 256 x 7 x 7 
+    #selected_rois = mean_pool(selected_rois, -1)  # K x 256 x 7
+    #selected_rois = mean_pool(selected_rois, -1)  # K X 256
+    '''
+
+    selected_rois = []
+    for frame in objects:
+        if len(frame['boxes'] > 0):
+            rois = detector.roi_heads.box_roi_pool(outputs[0], [frame['boxes']], [i.shape[-2:] for i in tensor]) # K x 256 x 7 x 7
+            rois = mean_pool(rois, -1)  # K x 256 x 7
+            rois = mean_pool(rois, -1)  # K x 256
+            rois = rois.cpu().numpy()
+        else:
+            rois = torch.zeros(1, 256).cpu().numpy() # we generate a 1 x 256 feature vector of zeros in case there's no objects
+        selected_rois.append(rois)
     # move to cpu (check this!)
-    selected_rois = selected_rois.cpu().numpy()
     objects = [{'boxes': o['boxes'].to(device).cpu().numpy(), 'scores': o['scores'].cpu().numpy(),'labels': o['labels'].cpu().numpy()} for o in objects]
     return objects, selected_rois # return object labels and the corresponding feature maps
 
