@@ -5,7 +5,7 @@ import nltk
 import itertools
 import random
 from collections import OrderedDict
-from transformers import RobertaTokenizer, XLNetTokenizer
+from transformers import RobertaTokenizer
 
 from utils import *
 from .load_subtitle import merge_qa_subtitle, empty_sub
@@ -101,8 +101,8 @@ class ImageData:
         self.none_index = speaker_index['None']
         self.visual_pad = [self.none_index, self.pad_index, self.pad_index] 
 
+        #self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         self.tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
-        #self.tokenizer = XLNetTokenizer.from_pretrained('xlnet-large-cased')
 
         self.image_path = args.image_path
         self.image_dim = args.image_dim
@@ -166,8 +166,6 @@ class ImageData:
         """
         full_images = features['full_image']
         person_fulls = features['person_full']
-        object_labels = features['object_labels']
-        objects = features['object_features']
 
         for frames in full_images:
             for key, value in frames.items():
@@ -181,19 +179,10 @@ class ImageData:
             master_dict = full_images[e]
             pfu_dict = person_fulls[e]
             visual_dict = visuals[e]
-            try:
-                object_framedict = objects[e]
-            except:
-                object_framedict = {}
-            object_labels_framedict = object_labels[e]
 
             for frame, info in master_dict.items():
                 if frame not in visual_dict: # no visual for this frame
                     continue
-                
-                # all possible person, emotion and action elements enumerated
-                behavior_list = ['Anna', 'Chairman', 'Deogi', 'Dokyung', 'Gitae', 'Haeyoung1', 'Haeyoung2', 'Heeran', 'Hun', 'Jeongsuk', 'Jinsang', 'Jiya', 'Kyungsu', 'Sangseok', 'Seohee', 'Soontack', 'Sukyung', 'Sungjin', 'Taejin', 'Yijoon', 'Anger', 'Disgust', 'Fear', 'Happiness', 'Neutral', 'Sadness', 'Surprise', 'call', 'clean', 'cook', 'dance', 'destroy', 'drink', 'eat', 'high-five', 'hold', 'hug', 'kiss', 'look at/back on', 'look for', 'nod', 'none', 'open', 'play instruments', 'point out', 'push away', "put arms around each other's shoulder", 'shake hands', 'sing', 'sit down', 'smoke', 'stand up', 'walk', 'watch', 'wave hands', 'write']
-                behavior_dict = {key.lower(): str(idx) for idx, key in enumerate(behavior_list)}
 
                 visual = visual_dict[frame]
                 processed_persons = master_dict[frame]['persons']
@@ -214,10 +203,7 @@ class ImageData:
                     #emotion_idx = self.pad_index if emotion == '' else self.vocab.get_index(emotion)
                     emotion_idx = self.pad_index if emotion == '' else self.tokenizer.encode(emotion, add_special_tokens=False)[0]
 
-                    #attribute = person_id.title() + " " +  "feels" + " " + emotion.lower() + " " + "and" + " " + behavior.lower() + "." # original
-                    attribute = person_id.title() + " " + "is" + " " + behavior.lower() + " " + "and feels" + " " + emotion.lower() + "." # as sentences (modified)
-                    #attribute = person_id.title() + " " + emotion.lower() + " " + "." # as words
-                    #attribute = behavior_dict[person_id.title().lower()] + " " + behavior_dict[emotion.lower()] + " " + behavior_dict[behavior.lower()] + "." # as numbers
+                    attribute = person_id.title() + " " +  "feels" + " " + emotion.lower() + " " + "and" + " " + behavior.lower() + "."
                     attributes.append(attribute)
 
                     processed = [person_id_idx, behavior_idx, emotion_idx] # Don't convert visual to a tensor yet
@@ -225,24 +211,12 @@ class ImageData:
 
                 attributes = " ".join(attributes)
                 master_dict[frame]['attributes'] = attributes
-                
-                # Extract objects
-                try:
-                    objects = object_framedict[frame]
-                except:
-                    objects = []
-                # Extract object labels
-                try:
-                    objects_labels = object_labels_framedict[frame]
-                except:
-                    object_labels = []
 
-                master_dict[frame]['objects'] = objects
-                master_dict[frame]['object_labels'] = object_labels
                 # when processed_persons is empty, pfu_dict[frame] contains 
                 # full_image feature. Just ignore this.
                 if processed_persons: # not empty
                     master_dict[frame]['person_fulls'] = list(pfu_dict[frame]) # (N, C) np.array -> list of N arrays of shape (C,)
+
         return full_images
 
     def line_to_words(self, line, sos=True, eos=True, downcase=True, sos_token='<s>', eos_token='</s>'):
@@ -282,8 +256,6 @@ class ImageData:
         all_pfu = []  # list of person_full features (aligned with person)
         all_v = []    # list of visuals              (aligned with person)
         sample_v = [] # first visual in the range
-        all_obj = []  # list of object features
-        all_obj_lab = [] # list of object labels
         per_person_features = defaultdict(list) # dict of features on a person-level rather than frame-level
         all_attributes = [] # list of all attributes (behavior + emotion) on a frame level where each attribute is e.g. "Jiya feels sadness and stand up. Haeyoung1 feels angry and sit down"
 
@@ -303,12 +275,6 @@ class ImageData:
 
                 pfu = frame['person_fulls']
                 all_pfu.extend(pfu)
-
-                if "objects" in frame:
-                    obj = frame['objects']
-                    obj_lab = frame['object_labels']
-                    all_obj.append(obj)
-                    all_obj_lab.append(obj_lab)
 
                 if "attributes" in frame:
                     frame_attributes = frame['attributes']
@@ -356,11 +322,8 @@ class ImageData:
         # flatten
         #per_person_features = list(per_person_features.values())
 
-        # remove duplicates (only works in python > 3.7)
-        all_attributes = list(dict.fromkeys(all_attributes))
-
         # Don't convert visual to tensors yet
-        return mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features, all_attributes, all_obj, all_obj_lab
+        return mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features, all_attributes
 
 
 class TextData:
@@ -381,8 +344,6 @@ class TextData:
 
         #self.tokenizer = get_tokenizer(args)
         self.tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-        #self.tokenizer = XLNetTokenizer.from_pretrained('xlnet-large-cased')
-        
         """
         self.tokenizer.add_tokens(['None', # index 0: unknown speaker 
             'Anna', 'Chairman', 'Deogi', 'Dokyung', 'Gitae',
@@ -780,8 +741,6 @@ class MultiModalData(Dataset):
         all_pfu_l = []      # list of all person_full features
         sample_v_l = []     # list of one sample visual
         all_v_l = []        # list of all visual
-        all_obj_l = []      # list of all object features
-        all_obj_lab_l = []  # list of all object labels
 
         if subtitle != empty_sub: # subtitle exists
             subs = subtitle["contained_subs"]
@@ -807,26 +766,22 @@ class MultiModalData(Dataset):
                 # all_v_l.extend(all_v)
                 # all_pfu_l.extend(all_pfu)
 
-            # get image by shot_contained, CAREFUL we currently assume obj and lab are already torch tensors; this might change to numpy in the future TODO
-            mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features, attributes, all_obj, all_obj_lab = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
+            # get image by shot_contained
+            mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features, attributes = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
             mean_fi_l.append(mean_fi)
             all_fi_l.extend(all_fi)
             sample_v_l.append(sample_v)
             all_v_l.extend(all_v)
             all_pfu_l.extend(all_pfu)
-            all_obj_l.extend(all_obj)
-            all_obj_lab_l.extend(all_obj_lab)
         else: # No subtitle
             spkr_of_sen_l.append(self.none_index) # add None speaker
             sub_in_sen_l.append([self.pad_token]) # add <pad>
-            mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features, attributes, all_obj, all_obj_lab = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
+            mean_fi, all_fi, sample_v, all_v, all_pfu, per_person_features, attributes = self.image.get_image_by_vid(episode, scene, shot_contained) # get all image in the scene/shot
             mean_fi_l.append(mean_fi)
             all_fi_l.extend(all_fi)
             sample_v_l.append(sample_v)
             all_v_l.extend(all_v)            
             all_pfu_l.extend(all_pfu)
-            all_obj_l.extend(all_obj)
-            all_obj_lab_l.extend(all_obj_lab)
 
         # Concatenate subtitle sentences
         sub_in_word_l = []; spkr_of_word_l = []
@@ -851,17 +806,11 @@ class MultiModalData(Dataset):
         # Create combined text input that appends question and subtitle
         que_tokenized = self.tokenizer.tokenize(sos_token + que + eos_token) # tokenize question and add special tokens, sub is already tokenized
         attributes_tokenized_l = [self.tokenizer.tokenize(sos_token + sentence + eos_token) for sentence in attributes] # tokenize attribute sentences as well and keep them in list
-        if not attributes_tokenized_l: # if the list is empty, append sos and eos token
-            attributes_tokenized_l = [self.tokenizer.tokenize(sos_token + eos_token)]
-        text = [que_tokenized] + attributes_tokenized_l + sub_in_sen_l # all language features
-        #text = [que_tokenized] + attributes_tokenized_l # Q + M only 
-        #text = attributes_tokenized_l # M only
+        text = [que_tokenized] + attributes_tokenized_l #+ sub_in_sen_l 
 
         # Create token type ids
-        token_type_ids = len(que_tokenized) * [0] + sum([len(sentence) for sentence in sub_in_sen_l]) * [1] + sum([len(sentence) for sentence in attributes_tokenized_l]) * [2] # token types for all language features
-        #token_type_ids = len(que_tokenized) * [0] + sum([len(sentence) for sentence in attributes_tokenized_l]) * [2] # question + meta only
-        #token_type_ids = sum([len(sentence) for sentence in attributes_tokenized_l]) * [0] # meta only
- 
+        #token_type_ids = len(que_tokenized) * [0] + sum([len(sentence) for sentence in sub_in_sen_l]) * [1] + sum([len(sentence) for sentence in attributes_tokenized_l]) * [2]
+        token_type_ids = len(que_tokenized) * [0] + sum([len(sentence) for sentence in attributes_tokenized_l]) * [2]
 
         # Mask tokens
         masked = [self.mask_tokens(sentence, self.tokenizer, p=0.0) for sentence in text]
@@ -892,19 +841,17 @@ class MultiModalData(Dataset):
             sub_in_sen_l[idx] = self.tokenizer.convert_tokens_to_ids(sentence)
 
         # Remove paddings in between and flatten visuals 
-        filtered_v = []; filtered_fi = []; filtered_pfu = []; filtered_obj = []; filtered_obj_lab = []
+        filtered_v = []; filtered_fi = []; filtered_pfu = []
         max_img_len = self.max_image_len
         n_img = 0
-        for v, fi, pfu, obj, obj_lab in zip(all_v_l, all_fi_l, all_pfu_l, all_obj_l, all_obj_lab_l):
+        for v, fi, pfu in zip(all_v_l, all_fi_l, all_pfu_l):
             if v != self.image.visual_pad:
                 filtered_v.extend(v) # flatten visuals 
                 filtered_fi.append(fi)
                 filtered_pfu.append(pfu)
-                filtered_obj.append(obj)
-                filtered_obj_lab.append(obj_lab)
                 n_img += 1
                 if n_img > max_img_len:
-                    del filtered_fi[max_img_len:], filtered_v[max_img_len * 3:], filtered_pfu[max_img_len:], filtered_obj[max_img_len:], filtered_obj_lab[max_img_len:]
+                    del filtered_fi[max_img_len:], filtered_v[max_img_len * 3:], filtered_pfu[max_img_len:]
 
                     break
 
@@ -939,8 +886,6 @@ class MultiModalData(Dataset):
             'filtered_v': filtered_v,
             'filtered_pfu': filtered_pfu,
             'per_person_features': per_person_features,
-            'objects': filtered_obj,
-            'object_labels': filtered_obj_lab,
 
             'q_level_logic': q_level_logic,
             'qid': qid
@@ -983,10 +928,7 @@ class MultiModalData(Dataset):
 
         q_level_logic = collected['q_level_logic'] # No need to convert to torch.Tensor
         qid = collected['qid'] # No need to convert to torch.Tensor
-      
-        objects = collected['objects']
-        object_labels = collected['object_labels']
-
+        
         data = {
             'que': que,
             'answers': ans,
@@ -1016,8 +958,6 @@ class MultiModalData(Dataset):
             'filtered_image_len': f_fi_l,
             'filtered_person_full_len': f_pfu_l,
             'per_person_features': per_person_features,
-            'objects': objects,
-            'object_labels': object_labels,
 
             'q_level_logic': q_level_logic,
             'qid': qid

@@ -394,7 +394,7 @@ class UtilityBlock(nn.Module):
         out = torch.cat([out_t, out_a], dim=2) # concatenate the resulting output tensors
         out = self.relu(self.linear(out)) 
         out = self.dropout(out)
-        out = self.norm(out + target) # add & norm (residual target)
+        out = self.norm(out + out_a) # add & norm (residual target)
         return out
 
 class UtilityLayer(nn.Module):

@@ -49,7 +49,9 @@ def get_model_ckpt(args):
     iters, vocab = get_iterator_multichoice(args, vocab)
     model = get_model(args, vocab)
     model.module.load_embedding(vocab)
+    #model.load_embedding(vocab)
 
     if ckpt_available:
-        model.module.load_state_dict(dt['model'])
+        #model.module.load_state_dict(dt['model'])
+        model.load_state_dict(dt['model'])
     return args, model, iters, vocab, ckpt_available

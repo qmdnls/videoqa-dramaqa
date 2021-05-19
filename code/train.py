@@ -19,9 +19,11 @@ def get_trainer(args, model, loss_fn, optimizer):
         model.train()
         optimizer.zero_grad()
         net_inputs, target = prepare_batch(args, batch, model.module.vocab)
+        #net_inputs, target = prepare_batch(args, batch, model.vocab)
         y_pred, char_pred, mask_pred = model(**net_inputs)
         batch_size = y_pred.shape[0] 
 
+        '''
         # get person ground truth and compute character loss
         n_char = 21
         visual_char = net_inputs['filtered_visual'].view(batch_size, -1, 3)[:,:,0]
@@ -36,6 +38,7 @@ def get_trainer(args, model, loss_fn, optimizer):
         mask_target = mask_target.view(-1)
         mask_pred = mask_pred.view(-1, vocab_size)
         mlm_loss = nn.CrossEntropyLoss(ignore_index=-1).cuda()(mask_pred, mask_target)
+        '''
 
         # compute QA loss
         loss, stats = loss_fn(y_pred, target)
@@ -66,6 +69,7 @@ def get_pretrainer(args, model, loss_fn, optimizer):
         model.train()
         optimizer.zero_grad()
         net_inputs, target = prepare_batch(args, batch, model.module.vocab)
+        #net_inputs, target = prepare_batch(args, batch, model.vocab)
         y_pred, char_pred, mask_pred = model(**net_inputs)
         batch_size = y_pred.shape[0] 
         

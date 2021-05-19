@@ -18,10 +18,11 @@ def get_evaluator(args, model, loss_fn):
         model.eval()
         with torch.no_grad():
             qids = batch["qid"]
-            net_inputs, _ = prepare_batch(args, batch, model.vocab)
+            net_inputs, _ = prepare_batch(args, batch, model.module.vocab)
             y_pred, char_pred, mask_pred = model(**net_inputs)
+            print("Before argmax:", y_pred.size())
             y_pred = y_pred.argmax(dim=-1)  # + 1  # 0~4 -> 1~5
-
+            print("After argmax:", y_pred.size())
             for qid, ans in zip(qids, y_pred):
                 engine.answers[qid] = ans.item()
 
@@ -39,7 +40,8 @@ def evaluate_once(evaluator, iterator):
 
 
 def infer(args):
-    split = args.split 
+    #split = args.split 
+    split = 'test'
 
     args, model, iters, vocab, ckpt_available = get_model_ckpt(args)
     print("loaded:", args.ckpt_name)

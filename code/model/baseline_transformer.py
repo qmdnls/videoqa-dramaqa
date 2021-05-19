@@ -8,7 +8,7 @@ from transformers import RobertaTokenizer, RobertaModel, XLNetTokenizer, XLNetMo
 from model.rnn import RNNEncoder, max_along_time, mean_along_time
 from model.modules import CharMatching, ContextMatching
 
-class MMT_lm(nn.Module):
+class Baseline_transformer(nn.Module):
     def __init__(self, args, vocab, n_dim, image_dim, layers, dropout, num_choice=5):
         super().__init__()
         self.vocab = vocab
@@ -17,70 +17,30 @@ class MMT_lm(nn.Module):
         self.hidden_dim = n_dim
         self.num_choice = num_choice
 
-        #video_encoder_layer = nn.TransformerEncoderLayer(d_model=300, nhead=6, dim_feedforward=1024, dropout=0.1, activation='gelu')
-        #self.video_encoder = nn.TransformerEncoder(video_encoder_layer, num_layers=1)
-        #self.video_encoder = nn.GRU(2048, 150, bidirectional=True, batch_first=True)
-
-        #multimodal_encoder_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=6, dim_feedforward=1024, dropout=0.5, activation='gelu')
-        #self.transformer = nn.TransformerEncoder(multimodal_encoder_layer, num_layers=2)
-        #self.transformer = nn.Transformer(d_model=n_dim, nhead=6)
-
         self.embedding = nn.Embedding(V, D)
         n_dim = args.n_dim
         image_dim = args.image_dim
 
-        self.tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-        self.language_model = RobertaModel.from_pretrained('roberta-base', return_dict=True) 
-        #self.tokenizer = XLNetTokenizer.from_pretrained('xlnet-base-cased')
-        #self.language_model = XLNetModel.from_pretrained('xlnet-base-cased')
-
-        # Freeze LM weights during training
-        #for param in self.language_model.base_model.parameters():
-        #    param.requires_grad = False
-
-        # Update config to finetune token type embeddings
-        self.language_model.config.type_vocab_size = 5 
-
-        # Create a new Embeddings layer, with 2 possible segments IDs instead of 1
-        self.language_model.embeddings.token_type_embeddings = nn.Embedding(5, self.language_model.config.hidden_size)
-                
-        # Initialize it
-        self.language_model.embeddings.token_type_embeddings.weight.data.normal_(mean=0.0, std=self.language_model.config.initializer_range)
-
-        # Freeze the first 6 layers
-        #modules = [self.language_model.encoder.layer[:6]]
-        #for module in modules:
-        #    for param in module.parameters():
-        #        param.requires_grad = False
-
-        #self.cmat = ContextMatching(n_dim * 3) 
-        #self.lstm_raw = RNNEncoder(300, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
-        #self.lstm_script = RNNEncoder(321, 150, bidirectional=True, dropout_p=0, n_layers=1, rnn_type="lstm")
         self.script_on = "script" in args.stream_type
         self.vbb_on = "visual_bb" in args.stream_type
         self.vmeta_on = "visual_meta" in args.stream_type
-        #self.conv_pool = Conv1d(n_dim*4+1, n_dim*2)
 
-        #self.character = nn.Parameter(torch.randn(22, D, device=args.device, dtype=torch.float), requires_grad=True)
-        #self.norm1 = Norm(D)
+        self.tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
+        self.language_model = RobertaModel.from_pretrained('roberta-base', return_dict=True)
+        self.language_model.config.type_vocab_size = 5
+        self.language_model.embeddings.token_type_embeddings = nn.Embedding(5, self.language_model.config.hidden_size)
+        self.language_model.embeddings.token_type_embeddings.weight.data.normal_(mean=0.0, std=self.language_model.config.initializer_range)
 
-        self.lang_proj = nn.Linear(768, 300) # RoBERTa-base internal size to model size d=300
-        self.visual_proj = nn.Linear(2048, 300) 
-        
-        #self.mh_video = nn.MultiheadAttention(300, 6) 
-        #self.context_gru = nn.GRU(300, 150, bidirectional=True, batch_first=True)
-        self.cross1 = UtilityLayer(300)
-        #self.cross2 = UtilityLayer(300)
+        multimodal_encoder_layer = nn.TransformerEncoderLayer(d_model=n_dim, nhead=6, dim_feedforward=1024, dropout=0.5, activation='gelu')
+        self.transformer = nn.TransformerEncoder(multimodal_encoder_layer, num_layers=2)
 
         # Needed for pretraining
         self.char_classifier = nn.Linear(300, 21)
         self.mask_classifier = nn.Linear(300, self.tokenizer.vocab_size)
-
-        self.video_cls = nn.Linear(300, 1)
-        self.language_cls = nn.Linear(300,1)
-        #self.joint_cls = nn.Linear(300, 1)
-
-        #self.answer_rnn = nn.LSTM(300, 300, 1, batch_first=True, dropout=0)
+        
+        self.visual_proj = nn.Linear(image_dim, 300) # RoBERTa-internal size to model size d=300
+        self.lang_proj = nn.Linear(768, 300) # RoBERTa-internal size to model size d=300
+        self.cls = nn.Linear(300, 1)
 
         speaker_name = [ 
             'None', # index 0: unknown speaker 
@@ -223,74 +183,37 @@ class MMT_lm(nn.Module):
         # stack the text-answers pairs
         text = torch.stack(e_ans, dim=1)
        
-        '''
-        # EXPERIMENT FOR QA ONLY
-        text_context, _ = torch.max(text, dim=2)
-        scores = self.language_cls(text_context).squeeze()
-       
-        video = features['filtered_person_full']
-        video_length = video.size(1)
-        char = torch.zeros(batch_size, video_length, 21).cuda()
-        labels = torch.zeros(batch_size, text_length, self.tokenizer.vocab_size).cuda()
-        # EXPERIMENT END
-        '''
-        
-        # predict the masked tokens @@ UNCOMMENT THIS IF YOU WANT TO PRETRAIN
-        #labels = self.mask_classifier(text[:,0,:text_length,:])
-
         # encode video frames
         video = features['filtered_person_full']
         video_length = video.size(1)
         video = self.visual_proj(video)
-        
-        # predict person contained in each bounding box @@ UNCOMMENT THIS FOR PRETRAINING
-        #char = self.char_classifier(video)
-        #char = self.char_classifier(context.unsqueeze(dim=1).repeat(1, video_length, 1))
-        
-        # Attend video frames to text
-        #video = video.permute(1,0,2)
-        #text = text.permute(1,0,2)
-        #video, _ = self.mh_video(text, video, video)
-        #video = video.permute(1,0,2)
-        #text = text.permute(1,0,2)
-
-        # Transformer video encoder
-        #video = video.permute(1,0,2)
-        #video = self.video_encoder(video)
-        #video = video.permute(1,0,2)
-
-        ### CROSS-MODALITY UTILITY LAYER
+         
+        ### SINGLE-STREAM CROSS-MODAL TRANSFORMER ENCODER (BASELINE) 
         context = []
         for i in range(5):
             text_input = text[:,i,:,:]
-            text_context, video_context = self.cross1(text_input, video)
-            #text_context, video_context = self.cross2(text_context, video_context)
-            context.append((text_context, video_context))
+            seq = torch.cat([text_input, video], dim=1) 
+            seq = seq.permute(1,0,2)
+            seq = self.transformer(seq)
+            seq = seq.permute(1,0,2)
+            context.append(seq)
             del text_input
-        text_context, video_context = zip(*context)
-        del context
         
-        # stack text and video context and maxpool
-        video_context = torch.stack(video_context, dim=1)
-        video_context, _ = torch.max(video_context, dim=2)
-        text_context = torch.stack(text_context, dim=1)
-        label_prediction_context, _ = torch.max(text_context, dim=1)
-        char_prediction_context, _ = torch.max(video_context, dim=1)
-        text_context, _ = torch.max(text_context, dim=2)
+        # stack context and maxpool
+        context = torch.stack(context, dim=1)
+        label_prediction_context, _ = torch.max(context, dim=2)
+        char_prediction_context, _ = torch.max(context, dim=1)
+        char_prediction_context, _ = torch.max(char_prediction_context, dim=1)
+        context, _ = torch.max(context, dim=2)
      
         # predict masked tokens
         labels = self.mask_classifier(label_prediction_context[:,:text_length,:])
 
         # predict person contained in each bounding box
         char = self.char_classifier(char_prediction_context.unsqueeze(dim=1).repeat(1, video_length, 1))
-        
+
         # classify answers @@ UNCOMMENT THIS
-        visual_score = self.video_cls(video_context).squeeze()
-        language_score = self.language_cls(text_context).squeeze()
-        scores = visual_score + language_score
-        
-        #context = text_context * video_context
-        #scores = self.joint_cls(context).squeeze()
+        scores = self.cls(context).squeeze()
         
         return scores, char, labels 
 

@@ -1,11 +1,11 @@
 config = {
     'extractor_batch_size': 32, 
-    'model_name': 'mmt_lm', 
+    'model_name': 'baseline_transformer', 
     'log_path': 'data/log',
     #'tokenizer': 'nltk',
     'tokenizer': 'nonword', # 'nltk' # need to check
     #'tokenizer': 'bert',
-    'batch_sizes':  (6, 4, 4), # (16, 24, 12)
+    'batch_sizes':  (6, 6, 6), # (16, 24, 12)
     'lower': True,
     'use_inputs':['que','answers','subtitle','speaker','images','sample_visual','filtered_visual','filtered_sub','filtered_speaker','filtered_image','que_len','ans_len','sub_len','filtered_visual_len','filtered_sub_len','filtered_image_len', 'filtered_person_full', 'filtered_person_full_len','per_person_features','text_masked','text_masked_l','token_type_ids','labels','labels_l','q_level_logic'],
     'stream_type': ['visual_meta'], # default: ['script', 'visual_bb', 'visual_meta']
@@ -19,7 +19,7 @@ config = {
     'vocab_path': "data/vocab.pickle",
     'val_type': 'all', # all | ch_only
     'pretrain_epochs': 0,
-    'max_epochs': 50,
+    'max_epochs': 7,
     'num_workers': 40, 
     #'image_dim': 512,  # hardcoded for ResNet18
     'image_dim': 2048, # hardcoded for ResNet152

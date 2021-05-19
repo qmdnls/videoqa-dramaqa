@@ -45,6 +45,7 @@ def get_evaluator(args, model, loss_fn, metrics={}):
         model.eval()
         with torch.no_grad():
             net_inputs, target = prepare_batch(args, batch, model.module.vocab)
+            #net_inputs, target = prepare_batch(args, batch, model.vocab)
             if net_inputs['subtitle'].nelement() == 0:
                 import ipdb; ipdb.set_trace()  # XXX DEBUG
             y_pred, char_pred, mask_pred = model(**net_inputs)
@@ -132,6 +133,7 @@ def evaluate_by_logic_level(args, model, iterator, print_total=False):
     from tqdm import tqdm
 
     vocab = model.module.vocab
+    #vocab = model.vocab
     model.eval()
 
     cor_que_n = torch.zeros(5) # level: 1 ~ 4 (0: pad)
@@ -202,6 +204,7 @@ def qa_similarity(args):
     iters, vocab = get_iterator(args)
     iterator = iters['val']
     model.module.vocab = vocab
+    #model.vocab = vocab
     model.eval = lambda: None
     vocab = torch.from_numpy(vocab).to(args.device)
 

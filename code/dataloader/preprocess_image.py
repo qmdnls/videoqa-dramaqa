@@ -7,13 +7,17 @@ from PIL import Image
 from tqdm import tqdm
 
 import torch
+import torchvision
 from torch import nn, utils
 from torchvision import models, datasets, transforms
+from torchvision.models.detection import FasterRCNN
 from utils import *
 
 from .vision import VisionDataset
 
-image_types = ['full_image', 'person_full']
+
+#image_types = ['full_image', 'person_full']
+image_types = ['full_image', 'person_full', 'object_features', 'object_labels']
 image_size = [224, 224]
 delimiter = '/'
 
@@ -30,6 +34,14 @@ def get_model(args):
     extractor.to(args.device)
 
     return extractor
+
+def get_detector(args, backbone): # we assume model is pre-trained on imagenet for 1000 object classes and has 2048 output features
+    roi_pooler = torchvision.ops.MultiScaleRoIAlign(featmap_names=['0'], output_size=7, sampling_ratio=2)
+    #detector = nn.DataParallel(torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True, box_roi_pool=roi_pooler))
+    detector = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True, box_roi_pool=roi_pooler)
+    detector.eval().to("cuda:1")
+    
+    return detector
 
 def preprocess_images(args):
     print('Loading visual')
@@ -67,6 +79,7 @@ def preprocess_images(args):
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])
         model = get_model(args)
+        detector = get_detector(args, model)
         episode_paths = list(image_path.glob('*'))
         for e in tqdm(episode_paths, desc='Episode'):
             shot_paths = list(e.glob('*/*'))  # episode/scene/shot
@@ -76,14 +89,14 @@ def preprocess_images(args):
             images = {"{}{}{}".format(vid, delimiter, name): image for vid, shots in images.items() for name, image in shots.items()}
             dataset = ObjectDataset(args, images, visuals, not_cached, transform=transform)
             
-            chunk = extract_features(args, dataset, model)
+            chunk = extract_features(args, dataset, model, detector)
 
             for key in image_types:
                 for episode_total, episode_part in zip(features[key], chunk[key]):
                     episode_total.update(episode_part)
             
             del images, dataset # delete data to retrieve memory
-        del model # delete extractor model to retrieve memory
+        del model, detector # delete extractor and detector models to retrieve memory
 
         if args.cache_image_vectors:
             for key, path in not_cached.items():
@@ -226,10 +239,31 @@ def extract_and_pool(tensor, model, device):
     tensor = mean_pool(tensor, -1)  # N x C x H 
     tensor = mean_pool(tensor, -1)  # N x C
     tensor = tensor.cpu().numpy()
-
     return tensor
 
-def extract_features(args, dataset, model):
+def extract_objects(tensor, detector, device):
+    tensor = tensor.to("cuda:1")
+    outputs = []
+    # hooking to get the object features following:
+    # https://github.com/pytorch/vision/issues/1001#issuecomment-589532923
+    hook = detector.backbone.register_forward_hook(
+            lambda self, input, output: outputs.append(output))
+    objects = detector(tensor)
+    hook.remove()
+    # filter to keep top K = 15 highest scoring objects
+    objects = [{key: frame[key][:15] for key in frame} for frame in objects]
+    selected_rois = detector.roi_heads.box_roi_pool(outputs[0], [o['boxes'] for o in objects], [i.shape[-2:] for i in tensor]) # K x 256 x 7 x 7 
+    selected_rois = mean_pool(selected_rois, -1)  # K x 256 x 7
+    selected_rois = mean_pool(selected_rois, -1)  # K X 256
+    # keep a max of 36 objects
+    selected_rois = selected_rois[:36, :] # 36 X 256 we keep a max of 36 objects
+    objects = objects[:36]
+    # move to cpu (check this!)
+    selected_rois = selected_rois.cpu().numpy()
+    objects = [{'boxes': o['boxes'].to(device).cpu().numpy(), 'scores': o['scores'].cpu().numpy(),'labels': o['labels'].cpu().numpy()} for o in objects]
+    return objects, selected_rois # return object labels and the corresponding feature maps
+
+def extract_features(args, dataset, model, detector):
     """
     full_images_by_episode = [
         {}, # empty dict
@@ -289,7 +323,15 @@ def extract_features(args, dataset, model):
                 person_fulls = [extract_and_pool(pfu, model, device) for pfu in data['person_full']]
                 for (e, f), pfu in zip(keys, person_fulls):
                     features['person_full'][e][f] = pfu
-    
+   
+            if 'object_features' in not_cached:
+                object_labels, object_features = extract_objects(data['full_image'], detector, device)
+                for (e, f), ol in zip(keys, object_labels):
+                    features['object_labels'][e][f] = ol
+                for (e, f), of in zip(keys, object_features):
+                    features['object_features'][e][f] = of
+
+
     del dataloader
 
     return features
